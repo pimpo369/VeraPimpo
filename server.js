@@ -35,7 +35,16 @@ const cfg = {
   chatId:   process.env.VERAPIMPO_CHAT_ID,
   chatId2:  process.env.VERAPIMPO_CHAT_ID_2 || null,
   dashPass: process.env.DASHBOARD_PASSWORD || "verapimpo2026",
+  tgApiId:  parseInt(process.env.TG_API_ID  || "0"),
+  tgApiHash:process.env.TG_API_HASH || "",
+  tgSession:process.env.TG_SESSION  || "",
 };
+
+// Channels to monitor
+const TG_CHANNELS = [
+  { username: "Whale200",   type: "whale",  label: "Whale200" },
+  { username: "burjbnews",  type: "news",   label: "Burj News" },
+];
 
 const PAPER = true; // flip to false to go live
 
@@ -99,6 +108,16 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     type TEXT, message TEXT, market_id TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS tg_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel TEXT, channel_type TEXT,
+    message_id INTEGER, text TEXT,
+    sender TEXT, date DATETIME,
+    market_id TEXT, market_question TEXT,
+    relevance_score REAL DEFAULT 0,
+    fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(channel, message_id)
   );
 `);
 
@@ -832,12 +851,143 @@ async function monitorPositions() {
 }
 
 // ══════════════════════════════════════════════════════════
+// TELEGRAM CHANNEL MONITOR — via t.me/s/ public preview
+// No API keys needed. Works for any public channel.
+// ══════════════════════════════════════════════════════════
+
+async function scrapeTelegramChannel(channel) {
+  try {
+    const url  = `https://t.me/s/${channel.username}`;
+    const html = await safeFetchText(url, 12000);
+    if (!html || html.length < 500) {
+      console.log(`TG ${channel.label}: no data from t.me/s/`);
+      return [];
+    }
+
+    // Parse message divs from t.me/s/ preview page
+    const msgPattern = /<div class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/g;
+    const datePattern= /<time[^>]+datetime="([^"]+)"/g;
+    const imgPattern = /<a[^>]+href="([^"]+)"[^>]*>.*?<\/a>/g;
+
+    const rawMsgs = [...html.matchAll(/<div class="tgme_widget_message_bubble">([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/g)];
+    const results = [];
+
+    // Simpler: extract all text blocks
+    const textBlocks = [...html.matchAll(/<div class="tgme_widget_message_text js-message_text"[^>]*>([\s\S]*?)<\/div>/g)];
+    const dates      = [...html.matchAll(/datetime="([^"]+)"/g)].map(m=>m[1]);
+
+    for (let i = 0; i < textBlocks.length; i++) {
+      // Strip HTML tags
+      const raw  = textBlocks[i][1];
+      const text = raw.replace(/<[^>]+>/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#39;/g,"'").replace(/&quot;/g,'"').replace(/\s+/g,' ').trim();
+      if (!text || text.length < 10) continue;
+
+      const date = dates[i] || new Date().toISOString();
+      // Skip if older than 12 hours
+      if (new Date(date) < new Date(Date.now() - 12*3600000)) continue;
+
+      const lower = text.toLowerCase();
+
+      // Score relevance
+      const posWords = ["yes","win","likely","pump","bull","buy","surge","up","call","long"];
+      const negWords = ["no","lose","dump","bear","sell","crash","down","put","short"];
+      const cryptoKw = ["bitcoin","btc","eth","ethereum","crypto","polymarket","usdc","usd"];
+      const whaleKw  = ["whale","wallet","million","transfer","large","position","moved"];
+      const newsKw   = ["breaking","report","says","confirmed","announced","according"];
+
+      let score = 0;
+      posWords.forEach(w=>{ if(lower.includes(w)) score+=1; });
+      negWords.forEach(w=>{ if(lower.includes(w)) score-=0.5; });
+      cryptoKw.forEach(w=>{ if(lower.includes(w)) score+=2; });
+      if (channel.type==="whale") whaleKw.forEach(w=>{ if(lower.includes(w)) score+=2; });
+      if (channel.type==="news")  newsKw.forEach(w=>{ if(lower.includes(w)) score+=1; });
+
+      // Dollar amounts and wallet addresses boost score
+      (text.match(/\$[\d,.]+[MmBbKk]?/g)||[]).forEach(()=>score+=1);
+      (text.match(/0x[a-fA-F0-9]{40}/g)||[]).forEach(()=>score+=3);
+
+      // Match against known Polymarket markets
+      let marketId=null, marketQ=null;
+      const mkts = db.prepare("SELECT id,question FROM markets ORDER BY last_scanned DESC LIMIT 50").all();
+      for (const m of mkts) {
+        const mwords = (m.question||"").toLowerCase().split(" ").filter(w=>w.length>4);
+        const hits   = mwords.filter(w=>lower.includes(w)).length;
+        if (hits >= 2) { marketId=m.id; marketQ=m.question; break; }
+      }
+
+      // Save unique messages
+      const msgId = `${channel.username}_${i}_${date}`;
+      try {
+        db.prepare(`INSERT OR IGNORE INTO tg_messages
+          (channel,channel_type,message_id,text,sender,date,market_id,market_question,relevance_score)
+          VALUES (?,?,?,?,?,?,?,?,?)`)
+          .run(channel.label, channel.type, msgId, text.slice(0,1000), channel.label, date, marketId, marketQ, score);
+      } catch {}
+
+      results.push({channel:channel.label, type:channel.type, text, score, marketId, marketQ, date});
+    }
+
+    console.log(`TG ${channel.label}: ${results.length} messages scraped`);
+    return results;
+  } catch(e) {
+    console.error(`TG scrape ${channel.label}:`, e.message);
+    return [];
+  }
+}
+
+async function fetchAllTelegramChannels() {
+  const results = { whale:[], news:[] };
+  for (const ch of TG_CHANNELS) {
+    const msgs = await scrapeTelegramChannel(ch);
+    if (results[ch.type]) results[ch.type].push(...msgs);
+    else results[ch.type] = msgs;
+    await delay(2000);
+  }
+  return results;
+}
+
+async function initTelegramReader() {
+  console.log("TG channel monitor: using t.me/s/ scraper (no API keys needed)");
+  return true;
+}
+
+// Get Telegram signal score for a specific market
+function getTelegramSignalScore(marketId, marketQuestion) {
+  const q = (marketQuestion||"").toLowerCase();
+  const words = q.split(" ").filter(w=>w.length>4);
+
+  // Check recent TG messages for matches
+  const recent = db.prepare(
+    "SELECT * FROM tg_messages WHERE fetched_at > datetime('now','-6 hours') ORDER BY relevance_score DESC LIMIT 100"
+  ).all();
+
+  let whaleSignal = 0, newsSignal = 0;
+  for (const msg of recent) {
+    const lower = (msg.text||"").toLowerCase();
+    const matches = words.filter(w=>lower.includes(w)).length;
+    if (matches >= 2 || msg.market_id === marketId) {
+      if (msg.channel_type === "whale") whaleSignal += msg.relevance_score * 0.3;
+      if (msg.channel_type === "news")  newsSignal  += msg.relevance_score * 0.2;
+    }
+  }
+
+  return {
+    whaleSignal: Math.min(1, whaleSignal),
+    newsSignal:  Math.min(1, newsSignal),
+    hasSignal:   whaleSignal > 1 || newsSignal > 1
+  };
+}
+
+// ══════════════════════════════════════════════════════════
 // MAIN SCAN
 // ══════════════════════════════════════════════════════════
 
 async function runScan() {
   if (getState("paused")) return;
   console.log(`🔍 VeraPimpo scan ${new Date().toISOString()}`);
+
+  // Fetch Telegram channels first — enriches all subsequent agent decisions
+  fetchAllTelegramChannels().catch(e=>console.error("TG fetch:", e.message));
 
   let page=0, traded=0, scanned=0;
   const allMarkets=[];
@@ -902,6 +1052,9 @@ async function runScan() {
       const resSource = await checkResolutionSource(market);
       await delay(200);
 
+      // Telegram signals for this market
+      const tgSignal = getTelegramSignalScore(market.id, market.question);
+
       // All 6 agents
       const whaleRes  = agentWhaleCopy(whaleActivity);
       const newsRes   = await agentNewscat(market);
@@ -911,6 +1064,14 @@ async function runScan() {
       const techRes   = await agentTechnical(market);
       const mathRes   = await agentResolutionMath(market);
       const stealthRes= agentStealth(whaleActivity, newsRes, sentRes);
+
+      // Boost agent confidence if Telegram signals agree
+      if (tgSignal.whaleSignal > 0.5 && whaleRes.vote) {
+        whaleRes.confidence = Math.min(1, (whaleRes.confidence||0) + 0.15);
+      }
+      if (tgSignal.newsSignal > 0.5 && newsRes.vote) {
+        newsRes.confidence  = Math.min(1, (newsRes.confidence||0) + 0.15);
+      }
 
       const allAgents = [
         {...whaleRes,  name:"Whale"},
@@ -1231,7 +1392,16 @@ app.get("/api/markets", async (req,res)=>{
 
 app.get("/api/news", (req,res)=>{
   const limit = parseInt(req.query.limit)||50;
-  const rows  = db.prepare("SELECT * FROM news_items ORDER BY fetched_at DESC LIMIT ?").all(limit);
+  // Combine news_items and tg_messages into one feed
+  const news = db.prepare("SELECT *,'news' as feed_type FROM news_items ORDER BY fetched_at DESC LIMIT ?").all(Math.floor(limit*0.7));
+  const tg   = db.prepare("SELECT id,channel as source,text as headline,text as summary,NULL as url,NULL as image_url,date as published_at,market_id,market_question,'monitored' as status,'telegram' as feed_type FROM tg_messages WHERE relevance_score>1 ORDER BY fetched_at DESC LIMIT ?").all(Math.floor(limit*0.3));
+  // Merge and sort by date
+  const all  = [...news, ...tg].sort((a,b)=>new Date(b.fetched_at||b.published_at)-new Date(a.fetched_at||a.published_at));
+  res.json(all.slice(0,limit));
+});
+
+app.get("/api/tg-messages", (req,res)=>{
+  const rows = db.prepare("SELECT * FROM tg_messages ORDER BY fetched_at DESC LIMIT 100").all();
   res.json(rows);
 });
 
@@ -1327,6 +1497,9 @@ async function launch() {
     await bot.launch();
     console.log("✅ Telegram bot active");
   }
+
+  // Initialize Telegram channel monitor (scraper — no API keys needed)
+  initTelegramReader();
   await tg(
     `<b>VeraPimpo v1.0 Online</b>\n\n` +
     `Mode: PAPER TRADING\n` +
