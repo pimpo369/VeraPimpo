@@ -41,6 +41,75 @@
     overflow-x: hidden;
   }
 
+  /* ── TICKER BAR ──────────────────────────────────────── */
+  .ticker-bar {
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    height: 36px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    position: relative;
+  }
+  .ticker-label {
+    background: var(--blue);
+    color: #000;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    padding: 0 12px;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    z-index: 2;
+  }
+  .ticker-track {
+    display: flex;
+    animation: ticker-scroll 120s linear infinite;
+    will-change: transform;
+    white-space: nowrap;
+  }
+  .ticker-track:hover { animation-play-state: paused; }
+  @keyframes ticker-scroll {
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+  .ticker-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 24px;
+    font-size: 11.5px;
+    font-weight: 500;
+    border-right: 1px solid var(--border);
+    height: 36px;
+    flex-shrink: 0;
+    cursor: default;
+  }
+  .ticker-q {
+    color: var(--white);
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ticker-price {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+  .ticker-price.high { color: var(--green); }
+  .ticker-price.mid  { color: var(--amber); }
+  .ticker-price.low  { color: var(--red); }
+  .ticker-dot {
+    width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
+  }
+  .ticker-dot.high { background: var(--green); }
+  .ticker-dot.mid  { background: var(--amber); }
+  .ticker-dot.low  { background: var(--red); }
+
   /* ── LOGIN SCREEN ─────────────────────────────────── */
   #login-screen {
     position: fixed; inset: 0;
@@ -530,6 +599,16 @@
 
 <!-- APP -->
 <div id="app">
+  <!-- TICKER BAR -->
+  <div class="ticker-bar" id="ticker-bar">
+    <div class="ticker-label">POLYMARKET LIVE</div>
+    <div style="overflow:hidden;flex:1">
+      <div class="ticker-track" id="ticker-track">
+        <div class="ticker-item" style="color:var(--gray)">Loading markets...</div>
+      </div>
+    </div>
+  </div>
+
   <header class="header">
     <div class="header-logo">
       <svg viewBox="0 0 100 100">
@@ -568,6 +647,7 @@
       </div>
       <div style="display:flex;gap:8px">
         <button class="refresh-btn" id="overview-scan-btn" onclick="triggerScanOverview()" style="border-color:var(--blue);color:var(--blue)">Scan Now</button>
+        <button class="refresh-btn" onclick="triggerSync()" style="border-color:var(--green);color:var(--green)">Sync</button>
         <button class="refresh-btn" onclick="loadOverview()">Refresh</button>
       </div>
     </div>
@@ -778,6 +858,16 @@ const timeAgo = s => {
   return `${Math.floor(d/86400)}d ago`;
 };
 const shortAddr = a => a?`${a.slice(0,6)}...${a.slice(-4)}`:"?";
+
+// ── SYNC POSITIONS ────────────────────────────────────
+async function triggerSync() {
+  try {
+    const r = await fetch(`${API}/api/sync`, {method:"POST", headers:{"x-dashboard-password":password}});
+    const d = await r.json();
+    await loadOverview();
+    alert(`Sync complete. Restored: ${d.restored} | Open: ${d.open} | Deployed: $${(d.deployed||0).toFixed(2)}`);
+  } catch(e) { alert("Sync failed: "+e.message); }
+}
 
 // ── TRIGGER SCAN FROM OVERVIEW ────────────────────────
 async function triggerScanOverview() {
@@ -1353,6 +1443,45 @@ async function loadNews() {
   }
 }
 
+// ── TICKER ────────────────────────────────────────────
+let tickerMarkets = [];
+async function loadTicker() {
+  try {
+    const markets = await api("/markets");
+    if (!markets?.length) return;
+    tickerMarkets = markets;
+    renderTicker(markets);
+  } catch {}
+}
+
+function renderTicker(markets) {
+  const track = document.getElementById("ticker-track");
+  if (!track) return;
+
+  const items = markets.slice(0,40).map(m => {
+    let price = parseFloat(m.yes_price||m._yesPrice||0.5);
+    if (!price) {
+      try { const op=m.outcomePrices; price=typeof op==="string"?parseFloat(JSON.parse(op)[0]):parseFloat(Array.isArray(op)?op[0]:0.5); } catch { price=0.5; }
+    }
+    const pct  = (price*100).toFixed(1);
+    const cls  = price>=0.65?"high":price<=0.35?"low":"mid";
+    const q    = (m.question||"Unknown").slice(0,60)+(m.question?.length>60?"...":"");
+    return `<div class="ticker-item" title="${m.question||""}">
+      <div class="ticker-dot ${cls}"></div>
+      <div class="ticker-q">${q}</div>
+      <div class="ticker-price ${cls}">YES ${pct}%</div>
+    </div>`;
+  }).join("");
+
+  // Duplicate for seamless loop
+  track.innerHTML = items + items;
+}
+
+// Load ticker on boot and refresh every 2 hours
+loadTicker();
+setInterval(loadTicker, 7200000);
+
+// ── OVERVIEW AUTO-REFRESH ──────────────────────────────
 // Auto-refresh overview every 60 seconds
 setInterval(()=>{ if(document.querySelector(".nav-btn.active")?.dataset?.page==="overview") loadOverview(); }, 60000);
 </script>
