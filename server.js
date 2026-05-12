@@ -1079,6 +1079,11 @@ if (bot) {
     ctx.replyWithHTML(msg);
   });
  
+  bot.command("whalesscan", async ctx=>{
+    ctx.replyWithHTML("<i>Manual whale scan triggered — this takes 1-2 minutes...</i>");
+    refreshWhales().then(()=>ctx.replyWithHTML("Whale scan complete. Send /whales to see updated rankings."));
+  });
+ 
   bot.command("pause",   ctx=>{setState("paused",true);  ctx.reply("⏸️ VeraPimpo paused.");});
   bot.command("resume",  ctx=>{setState("paused",false); ctx.reply("▶️ VeraPimpo resumed.");});
   bot.command("status",  async ctx=>{
@@ -1103,7 +1108,7 @@ if (bot) {
     `5. Redeploy\n\n` +
     `See PDF guide for complete instructions.`
   ));
-  bot.help(ctx=>ctx.replyWithHTML(`/portfolio /positions /history /whales /markets /news /strategy /pause /resume /status /live`));
+  bot.help(ctx=>ctx.replyWithHTML(`/portfolio /positions /history /whales /whalesscan /markets /news /strategy /pause /resume /status /live`));
 }
  
 // ══════════════════════════════════════════════════════════
@@ -1191,6 +1196,11 @@ app.get("/api/alerts", (req,res)=>{
 app.get("/api/scan-log", (req,res)=>{
   const rows=db.prepare("SELECT * FROM scan_log ORDER BY scanned_at DESC LIMIT 100").all();
   res.json(rows);
+});
+ 
+app.post("/api/whalesscan", async (req,res)=>{
+  res.json({started:true, message:"Whale scan started — check back in 1-2 minutes"});
+  refreshWhales();
 });
  
 app.post("/api/pause",  (req,res)=>{setState("paused",true);  res.json({paused:true});});
