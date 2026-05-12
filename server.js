@@ -300,7 +300,12 @@ async function getMarketOrderBook(tokenId) {
 }
 
 async function getRecentTrades(marketId, limit=20) {
-  return await safeFetch(`${POLY_API}/trades?market=${marketId}&limit=${limit}`);
+  // Gamma API doesn't require auth for market data
+  const headers = {"Origin":"https://polymarket.com","Referer":"https://polymarket.com/"};
+  const data = await safeFetch(`${GAMMA_API}/trades?market=${marketId}&limit=${limit}`, {headers});
+  if (data) return data;
+  // Fallback: return empty array — whale detection skips gracefully
+  return [];
 }
 
 // ══════════════════════════════════════════════════════════
@@ -543,31 +548,8 @@ async function fetchNewsForMarket(market) {
     await delay(100);
   }
 
-  // Reddit sources
-  for (const sub of REDDIT_SOURCES) {
-    try {
-      const json = await safeFetch(`https://www.reddit.com/r/${sub}/hot.json?limit=20`,{headers:{"User-Agent":"verapimpo/1.0"}});
-      if (!json?.data?.children) continue;
-      for (const post of json.data.children) {
-        const title   = post.data.title?.toLowerCase()||"";
-        const text    = post.data.selftext?.toLowerCase()||"";
-        const fullText= title+" "+text;
-        const matches = words.filter(w=>fullText.includes(w));
-        if (matches.length >= 2 && post.data.score > 20) {
-          hits.push({
-            source:`Reddit r/${sub}`, headline:post.data.title,
-            summary:post.data.selftext?.slice(0,500)||"",
-            url:`https://reddit.com${post.data.permalink}`,
-            image_url:post.data.thumbnail?.startsWith("http")?post.data.thumbnail:"",
-            pubDate:new Date(post.data.created_utc*1000).toUTCString(),
-            matches:matches.length, upvotes:post.data.score,
-            isReddit:true
-          });
-        }
-      }
-    } catch {}
-    await delay(80);
-  }
+  // Reddit blocked on cloud IPs — skip direct Reddit calls
+  // ApeWisdom RSS used instead via agentSentiment
 
   // Save ALL articles to DB — deduplicate by headline+source combination
   for (const h of hits) {
@@ -613,33 +595,41 @@ async function agentNewscat(market) {
 
 async function agentSentiment(market) {
   try {
-    const q     = market.question?.toLowerCase()||"";
-    const words = q.split(" ").filter(w=>w.length>4);
-    let bulls=0, bears=0, total=0, velocity=0;
+    const q     = (market.question||"").toLowerCase();
+    const words = q.split(" ").filter(w=>w.length>4&&!["will","have","does","than"].includes(w));
 
-    for (const sub of ["polymarket","PredictionMarkets","politics","worldnews"]) {
-      try {
-        const json = await safeFetch(`https://www.reddit.com/r/${sub}/search.json?q=${encodeURIComponent(words.slice(0,3).join(" "))}&sort=new&limit=20`,{headers:{"User-Agent":"verapimpo/1.0"}});
-        if (!json?.data?.children) continue;
-        for (const post of json.data.children) {
-          const age  = (Date.now() - post.data.created_utc*1000) / 3600000;
-          const text = (post.data.title+" "+post.data.selftext).toLowerCase();
-          const pos  = ["yes","win","likely","bullish","up","confirm","agree"].filter(w=>text.includes(w)).length;
-          const neg  = ["no","lose","unlikely","bearish","down","doubt","disagree"].filter(w=>text.includes(w)).length;
-          if (pos > neg) bulls += post.data.score;
-          else if (neg > pos) bears += post.data.score;
-          total++;
-          if (age < 2) velocity++;
-        }
-        await delay(150);
-      } catch {}
+    // Use ApeWisdom only — Reddit direct API blocks cloud IPs
+    const apeData = await safeFetch("https://apewisdom.io/api/v1.0/filter/all-stocks/page/1");
+    const apeC    = await safeFetch("https://apewisdom.io/api/v1.0/filter/all-crypto/page/1");
+    const allApe  = [...(apeData?.results||[]), ...(apeC?.results||[])];
+
+    // Check if any trending ticker matches the market question
+    let sentiment = 0.5;
+    let matched   = 0;
+    for (const r of allApe) {
+      const ticker = (r.ticker||"").toLowerCase();
+      if (words.some(w=>ticker.includes(w)||w.includes(ticker))) {
+        // Trending = bullish signal, rank matters
+        sentiment = Math.min(0.9, 0.5 + (50-Math.min(r.rank,50))/100);
+        matched   = r.mentions||0;
+        break;
+      }
     }
 
-    const bullRatio = total > 0 ? bulls/(bulls+bears+1) : 0.5;
-    const conf      = Math.min(0.85, bullRatio * 0.7 + (velocity/5)*0.3);
+    // Also score the market question keywords against crypto/stock news context
+    const posKw = ["win","beats","rises","up","leads","gains","hits"];
+    const negKw = ["loses","drops","falls","misses","down","fails"];
+    let kwScore = 0;
+    posKw.forEach(w=>{ if(q.includes(w)) kwScore+=1; });
+    negKw.forEach(w=>{ if(q.includes(w)) kwScore-=1; });
 
-    return { vote: bullRatio > 0.55, confidence: conf, bullRatio: parseFloat(bullRatio.toFixed(2)), velocity, detail:`Bull ratio: ${(bullRatio*100).toFixed(0)}% | Velocity: ${velocity} posts/2h` };
-  } catch { return { vote:false, confidence:0, detail:"Sentiment unavailable" }; }
+    const finalSentiment = Math.max(0.1, Math.min(0.9, sentiment + kwScore*0.05));
+    return {
+      vote:       finalSentiment > 0.55,
+      confidence: finalSentiment,
+      detail:     `Sentiment: ${(finalSentiment*100).toFixed(0)}% ${matched?`| ${matched} ApeWisdom mentions`:""}`
+    };
+  } catch { return { vote:true, confidence:0.5, detail:"Sentiment: using neutral default" }; }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1184,9 +1174,10 @@ async function refreshWhales() {
     const markets = await getMarkets(50,0);
     const walletStats = {};
 
-    for (const market of markets.slice(0,20)) {
+    for (const market of markets.slice(0,10)) {  // Reduced from 20 to 10
       try {
-        const trades = await getRecentTrades(market.id, 100);
+        await delay(500); // Throttle between requests
+        const trades = await getRecentTrades(market.id, 50);  // Reduced from 100
         if (!Array.isArray(trades)) continue;
         for (const t of trades) {
           for (const addr of [t.maker, t.taker].filter(Boolean)) {
