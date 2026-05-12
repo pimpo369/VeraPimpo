@@ -584,11 +584,20 @@ async function agentSentiment(market) {
 
 async function agentTechnical(market) {
   try {
-    const price    = parseFloat(market.outcomePrices?.[0] || market.bestBid || 0);
+    // Robust price extraction — try all possible field names
+    let price = 0;
+    try {
+      const op = market.outcomePrices || market._yesPrice;
+      if (typeof op === "string") price = parseFloat(JSON.parse(op)[0]);
+      else if (Array.isArray(op)) price = parseFloat(op[0]);
+      else if (typeof op === "number") price = op;
+      else price = parseFloat(market.bestBid || market.lastTradePrice || market.yes_price || 0);
+    } catch { price = parseFloat(market.bestBid || market.yes_price || 0); }
+
     const volume   = parseFloat(market.volume||0);
     const volume24 = parseFloat(market.volume24hr||0);
-    const liquidity= parseFloat(market.liquidity||0);
-    if (!price) return { vote:false, confidence:0, detail:"No price data" };
+    const liquidity= parseFloat(market.liquidity||market._liq||0);
+    if (!price || price <= 0) return { vote:false, confidence:0, detail:"No price data", price:0 };
 
     // Volume momentum — is volume accelerating?
     const volMomentum = volume24 > 0 && volume > 0 ? volume24/(volume/30) : 0;
@@ -724,7 +733,17 @@ function checkGuardrails(market, consensus) {
 // ══════════════════════════════════════════════════════════
 
 async function executePaperTrade(market, consensus, agents, guardrails) {
-  const price     = parseFloat(market.outcomePrices?.[0] || 0.5);
+  // Robust price extraction
+  let price = 0;
+  try {
+    const op = market.outcomePrices || market._yesPrice || market.yes_price;
+    if (typeof op === "string") price = parseFloat(JSON.parse(op)[0]);
+    else if (Array.isArray(op)) price = parseFloat(op[0]);
+    else if (typeof op === "number") price = op;
+    else price = parseFloat(market.bestBid || market.lastTradePrice || market.yes_price || 0);
+  } catch { price = parseFloat(market.bestBid || market.yes_price || 0.5); }
+  if (!price || price <= 0 || isNaN(price)) price = parseFloat(market.yes_price || 0);
+
   const size      = guardrails.size;
   const shares    = parseFloat((size / price).toFixed(4));
   const stopPrice = Math.max(PROB_FLOOR, price * 0.85);
@@ -782,7 +801,13 @@ async function monitorPositions() {
       if (price >= trade.target_price)          exitReason = "TARGET_HIT";
       else if (price <= trade.stop_price)        exitReason = "STOP_HIT";
       else if (hoursLeft <= BLACKOUT_HOURS)      exitReason = "RESOLUTION_BLACKOUT";
-      else if (vol24 > (parseFloat(market.volume||0)/30)*VOL_SPIKE_EXIT) exitReason = "VOLUME_SPIKE";
+      else {
+        // Volume spike: only fire if there is a meaningful baseline (>$1000) and spike is real
+        const baseVol = parseFloat(market.volume||0)/30;
+        if (baseVol > 1000 && vol24 > 0 && vol24 > baseVol * VOL_SPIKE_EXIT) {
+          exitReason = "VOLUME_SPIKE";
+        }
+      }
 
       if (exitReason) {
         db.prepare("UPDATE paper_trades SET status='closed',pnl=?,pnl_pct=?,exit_reason=?,closed_at=CURRENT_TIMESTAMP WHERE id=?")
