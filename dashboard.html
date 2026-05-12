@@ -1158,42 +1158,53 @@ async function loadStrategy() {
   try {
     const strats = await api("/strategy");
     const maxTrades = Math.max(...strats.map(s=>s.trades), 1);
-    // Summary card
-    const total = strats.reduce((a,s)=>a+s.trades,0);
+    const total    = strats.reduce((a,s)=>a+s.trades,0);
     const totalPnl = strats.reduce((a,s)=>a+(s.pnl||0),0);
-    const allWins = strats.reduce((a,s)=>a+s.wins,0);
-    const globalWr = total>0?((allWins/total)*100).toFixed(1):"-";
+    const allWins  = strats.reduce((a,s)=>a+s.wins,0);
+    const globalWr = total>0?`${((allWins/total)*100).toFixed(1)}%`:"Waiting for first trade";
+
     let html = `
       <div class="card">
         <div class="card-label">All Strategies</div>
-        <div class="card-value ${totalPnl>=0?"val-green":"val-red"}">${fmt$(totalPnl)}</div>
-        <div class="card-sub">${total} trades • ${globalWr}% win rate</div>
+        <div class="card-value ${total===0?"val-white":totalPnl>=0?"val-green":"val-red"}">${total===0?"$0.00":fmt$(totalPnl)}</div>
+        <div class="card-sub">${total} trades closed • ${globalWr}</div>
       </div>
       <div class="card">
         <div class="card-label">Strategy Performance</div>
         <div style="margin-top:8px">`;
     html += strats.map(s=>{
-      const wr = s.trades>0?((s.wins/s.trades)*100).toFixed(0):"0";
-      const wrColor = parseInt(wr)>=65?"var(--green)":parseInt(wr)>=50?"var(--blue)":"var(--red)";
+      const wr      = s.trades>0?((s.wins/s.trades)*100).toFixed(0):null;
+      const wrColor = wr===null?"var(--gray)":parseInt(wr)>=65?"var(--green)":parseInt(wr)>=50?"var(--blue)":"var(--red)";
       return `<div class="strat-row">
         <div class="strat-name">${s.name}</div>
         <div class="strat-bar-wrap"><div class="strat-bar"><div class="strat-fill" style="width:${(s.trades/maxTrades)*100}%;background:${wrColor}"></div></div></div>
-        <div class="strat-stats"><div class="strat-wr" style="color:${wrColor}">${wr}%</div><div class="strat-pnl">${fmt$(s.pnl||0)}</div></div>
+        <div class="strat-stats">
+          <div class="strat-wr" style="color:${wrColor}">${wr!==null?wr+"%":"—"}</div>
+          <div class="strat-pnl">${fmt$(s.pnl||0)}</div>
+        </div>
       </div>`;
     }).join("");
     html += `</div></div>`;
-    // Individual cards
+
+    // Individual agent cards
     html += strats.map((s,i)=>{
-      const wr = s.trades>0?((s.wins/s.trades)*100).toFixed(1):"N/A";
-      const wrN = parseFloat(wr)||0;
-      const wrColor = wrN>=65?"val-green":wrN>=50?"val-blue":"val-red";
+      const hasData  = s.trades > 0;
+      const wr       = hasData?((s.wins/s.trades)*100).toFixed(1):null;
+      const wrN      = parseFloat(wr)||0;
+      const wrColor  = !hasData?"val-white":wrN>=65?"val-green":wrN>=50?"val-blue":"val-red";
+      const barColor = !hasData?"gray":wrN>=65?"green":"blue";
       return `<div class="card" style="animation-delay:${i*0.05}s">
-        <div class="card-label">${s.name}</div>
-        <div class="card-value ${wrColor}">${wr}<span style="font-size:16px">%</span></div>
+        <div class="card-label">${s.name.toUpperCase()}</div>
+        <div class="card-value ${wrColor}" style="${!hasData?"font-size:28px;color:var(--gray)":""}">${hasData?wr+"%":"—"}</div>
         <div class="card-sub">${s.trades} trades • Avg ${fmt$(s.avg_pnl||0)}/trade</div>
         <div class="progress-wrap">
-          <div class="progress-label"><span>Win Rate</span><span>${fmt$(s.pnl||0)} total</span></div>
-          <div class="progress-bar"><div class="progress-fill ${wrN>=65?"green":"blue"}" style="width:${wrN}%"></div></div>
+          <div class="progress-label">
+            <span>${hasData?"Win Rate":"Waiting for trades"}</span>
+            <span>${fmt$(s.pnl||0)} total</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill ${barColor}" style="width:${hasData?wrN:0}%"></div>
+          </div>
         </div>
       </div>`;
     }).join("");
@@ -1284,9 +1295,28 @@ async function loadNews() {
       return;
     }
     grid.innerHTML = items.map((item,i)=>{
-      const isReddit = (item.source||"").toLowerCase().includes("reddit");
+      const isTelegram = item.feed_type === "telegram";
+      const isReddit = !isTelegram && (item.source||"").toLowerCase().includes("reddit");
       const sub = isReddit ? item.source.replace("Reddit r/","") : "";
-      const statusBadge = `<span class="news-status ${item.status}">${item.status.toUpperCase()}</span>`;
+      const statusBadge = `<span class="news-status ${item.status||"monitored"}">${(item.status||"monitored").toUpperCase()}</span>`;
+
+      // Telegram message card
+      if (isTelegram) {
+        const chType = (item.channel_type||item.source||"").toLowerCase().includes("whale") ? "whale" : "news";
+        const chLabel = item.source||"Telegram";
+        return `
+          <div class="card" style="animation-delay:${i*0.03}s">
+            <div class="tg-header">
+              <div class="tg-icon">T</div>
+              <div class="tg-channel">${chLabel}</div>
+              <span class="tg-type ${chType}">${chType.toUpperCase()}</span>
+            </div>
+            <div class="tg-text">${(item.headline||item.text||"").slice(0,400)}</div>
+            ${item.market_question?`<div class="news-market">Related: ${item.market_question.slice(0,70)}</div>`:""}
+            <div class="news-time">${timeAgo(item.fetched_at||item.published_at)}</div>
+          </div>`;
+      }
+
       if (isReddit) {
         return `
           <div class="card" style="animation-delay:${i*0.03}s">
