@@ -140,6 +140,51 @@ try {
   console.log("Deduped news_items table");
 } catch(e) { console.log("Dedup:", e.message); }
 
+// ── POSITION BACKUP / RESTORE ─────────────────────────
+// Saves open positions to positions_backup.json after every trade
+// Restores them on boot if the SQLite DB was wiped by a redeploy
+
+const BACKUP_FILE = "./positions_backup.json";
+
+function savePositionBackup() {
+  try {
+    const open = db.prepare("SELECT * FROM paper_trades WHERE status='open'").all();
+    const fs   = require("fs");
+    fs.writeFileSync(BACKUP_FILE, JSON.stringify(open, null, 2));
+    console.log(`Position backup saved: ${open.length} positions`);
+  } catch(e) { console.error("Backup save failed:", e.message); }
+}
+
+function restorePositionsFromBackup() {
+  try {
+    const fs = require("fs");
+    if (!fs.existsSync(BACKUP_FILE)) { console.log("No position backup found."); return 0; }
+    const backed = JSON.parse(fs.readFileSync(BACKUP_FILE, "utf8"));
+    if (!backed?.length) return 0;
+    let restored = 0;
+    for (const p of backed) {
+      const exists = db.prepare("SELECT id FROM paper_trades WHERE id=? AND status='open'").get(p.id);
+      if (!exists) {
+        db.prepare(`INSERT OR IGNORE INTO paper_trades
+          (id,market_id,market_question,category,side,entry_price,current_price,
+           size,shares,stop_price,target_price,agents_fired,layer,tier,status,pnl,pnl_pct,closes_at,opened_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+          .run(p.id,p.market_id,p.market_question,p.category,p.side,
+               p.entry_price,p.current_price||p.entry_price,
+               p.size,p.shares,p.stop_price,p.target_price,
+               p.agents_fired,p.layer,p.tier,"open",0,0,
+               p.closes_at,p.opened_at);
+        restored++;
+      }
+    }
+    console.log(`Restored ${restored} positions from backup`);
+    return restored;
+  } catch(e) { console.error("Backup restore failed:", e.message); return 0; }
+}
+
+// Restore positions on boot
+const restored = restorePositionsFromBackup();
+
 // ── GUARDRAILS ────────────────────────────────────────────
 const BUDGET          = 500;
 const MAX_POSITION    = 50;
@@ -779,6 +824,7 @@ async function executePaperTrade(market, consensus, agents, guardrails) {
          agentsFired, consensus.label, consensus.votes, endDate);
 
   setState("daily_trades", (getState("daily_trades")||0)+1);
+  savePositionBackup(); // Persist to file so redeployments don't lose positions
 
   const msg =
     `<b>VERAPIMPO TRADE</b> [PAPER]\n\n` +
@@ -831,6 +877,7 @@ async function monitorPositions() {
       if (exitReason) {
         db.prepare("UPDATE paper_trades SET status='closed',pnl=?,pnl_pct=?,exit_reason=?,closed_at=CURRENT_TIMESTAMP WHERE id=?")
           .run(parseFloat(pnl.toFixed(4)), parseFloat(pnl_pct.toFixed(2)), exitReason, trade.id);
+        savePositionBackup(); // Update backup after close
         const totalPnl = (getState("total_pnl")||0) + pnl;
         setState("total_pnl", parseFloat(totalPnl.toFixed(4)));
         if (pnl < 0) setState("total_loss", (getState("total_loss")||0)+Math.abs(pnl));
@@ -1295,6 +1342,21 @@ if (bot) {
     runScan();
   });
 
+  bot.command("sync", async ctx=>{
+    const r = restorePositionsFromBackup();
+    const open = getOpenTrades();
+    ctx.replyWithHTML(
+      `<b>Sync Complete</b>
+
+` +
+      `Restored from backup: ${r} positions
+` +
+      `Total open now: ${open.length}/${MAX_POSITIONS}
+` +
+      `Deployed: $${getDeployed().toFixed(2)}/$${BUDGET}`
+    );
+  });
+
   bot.command("whalesscan", async ctx=>{
     ctx.replyWithHTML("<i>Manual whale scan triggered — this takes 1-2 minutes...</i>");
     refreshWhales().then(()=>ctx.replyWithHTML("Whale scan complete. Send /whales to see updated rankings."));
@@ -1324,7 +1386,7 @@ if (bot) {
     `5. Redeploy\n\n` +
     `See PDF guide for complete instructions.`
   ));
-  bot.help(ctx=>ctx.replyWithHTML(`/portfolio /scan /positions /history /whales /whalesscan /markets /news /strategy /pause /resume /status /live`));
+  bot.help(ctx=>ctx.replyWithHTML(`/portfolio /scan /sync /positions /history /whales /whalesscan /markets /news /strategy /pause /resume /status /live`));
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1427,6 +1489,12 @@ app.get("/api/scan-log", (req,res)=>{
   res.json(rows);
 });
 
+app.post("/api/sync", (req,res)=>{
+  const r    = restorePositionsFromBackup();
+  const open = getOpenTrades();
+  res.json({ restored:r, open:open.length, deployed:getDeployed() });
+});
+
 app.post("/api/scan", async (req,res)=>{
   res.json({started:true, message:"Scan started"});
   runScan();
@@ -1500,6 +1568,11 @@ async function launch() {
 
   // Initialize Telegram channel monitor (scraper — no API keys needed)
   initTelegramReader();
+  // Alert if positions were restored
+  if (restored > 0) {
+    await tg(`<b>VeraPimpo Restarted</b>\n\n${restored} position(s) restored from backup.\nSend /positions to verify.`);
+  }
+
   await tg(
     `<b>VeraPimpo v1.0 Online</b>\n\n` +
     `Mode: PAPER TRADING\n` +
