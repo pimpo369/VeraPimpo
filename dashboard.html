@@ -8,7 +8,7 @@
 <title>VeraPimpo</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,300&family=DM+Mono:wght@400;500&display=swap');
-
+ 
   :root {
     --bg:        #08090E;
     --bg2:       #0D0F1A;
@@ -30,9 +30,9 @@
     --font:      'DM Sans', sans-serif;
     --mono:      'DM Mono', monospace;
   }
-
+ 
   * { margin:0; padding:0; box-sizing:border-box; }
-
+ 
   body {
     background: var(--bg);
     color: var(--white);
@@ -40,7 +40,7 @@
     min-height: 100vh;
     overflow-x: hidden;
   }
-
+ 
   /* ── LOGIN SCREEN ─────────────────────────────────── */
   #login-screen {
     position: fixed; inset: 0;
@@ -111,11 +111,11 @@
     letter-spacing: 1px;
     font-weight: 600;
   }
-
+ 
   /* ── MAIN LAYOUT ──────────────────────────────────── */
   #app { display: none; }
   #app.visible { display: block; }
-
+ 
   .header {
     position: sticky; top: 0; z-index: 100;
     background: rgba(8,9,14,0.85);
@@ -148,7 +148,7 @@
   }
   .header-pnl.pos { color: var(--green); }
   .header-pnl.neg { color: var(--red); }
-
+ 
   /* ── NAV ─────────────────────────────────────────── */
   .nav {
     display: flex; gap: 2px;
@@ -177,11 +177,11 @@
     color: var(--white);
     border-bottom-color: var(--blue);
   }
-
+ 
   /* ── PAGES ───────────────────────────────────────── */
   .page { display: none; padding: 28px 24px; }
   .page.active { display: block; }
-
+ 
   /* ── MASONRY GRID ────────────────────────────────── */
   .masonry {
     columns: 3;
@@ -189,7 +189,7 @@
   }
   @media(max-width:1100px){.masonry{columns:2;}}
   @media(max-width:640px){.masonry{columns:1;}}
-
+ 
   .card {
     break-inside: avoid;
     background: var(--bg2);
@@ -202,7 +202,7 @@
   }
   .card:hover { border-color: var(--border2); transform: translateY(-2px); }
   @keyframes cardIn { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
-
+ 
   .card-label {
     font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
     color: var(--gray); text-transform: uppercase;
@@ -217,14 +217,14 @@
   .card-sub { font-size: 12px; color: var(--gray); margin-top: 6px; }
   .card-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; line-height: 1.3; }
   .card-body { font-size: 13px; color: var(--gray); line-height: 1.6; }
-
+ 
   /* Values colored */
   .val-green { color: var(--green); }
   .val-red   { color: var(--red); }
   .val-blue  { color: var(--blue); }
   .val-amber { color: var(--amber); }
   .val-white { color: var(--white); }
-
+ 
   /* ── PROGRESS BAR ────────────────────────────────── */
   .progress-wrap { margin-top: 12px; }
   .progress-label { display: flex; justify-content: space-between; font-size: 12px; color: var(--gray); margin-bottom: 5px; }
@@ -234,7 +234,7 @@
   .progress-fill.blue  { background: var(--blue); }
   .progress-fill.red   { background: var(--red); }
   .progress-fill.amber { background: var(--amber); }
-
+ 
   /* ── POSITION CARD ───────────────────────────────── */
   .position-card {
     background: var(--bg2);
@@ -264,14 +264,14 @@
     border: 1px solid var(--blue2);
     color: var(--blue);
   }
-
+ 
   /* ── PROBABILITY BAR ─────────────────────────────── */
   .prob-bar-wrap { margin: 10px 0; }
   .prob-bar-track { height: 6px; background: var(--bg3); border-radius: 3px; position: relative; overflow: hidden; }
   .prob-bar-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--blue), var(--green)); }
   .prob-bar-target { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--amber); }
   .prob-bar-stop { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--red); }
-
+ 
   /* ── WHALE CARD ──────────────────────────────────── */
   .whale-tier {
     display: inline-block;
@@ -303,7 +303,7 @@
     padding: 2px 8px; border-radius: 4px;
     margin-left: 8px;
   }
-
+ 
   /* ── NEWS CARD ───────────────────────────────────── */
   .news-image {
     width: 100%; aspect-ratio: 16/9;
@@ -366,7 +366,7 @@
     font-family: var(--mono);
   }
   .reddit-text { font-size: 13px; line-height: 1.6; color: var(--gray); margin-top: 8px; }
-
+ 
   /* ── HISTORY TABLE ───────────────────────────────── */
   .hist-item {
     display: flex; align-items: flex-start; gap: 12px;
@@ -389,7 +389,7 @@
   }
   .hist-pnl.pos { color: var(--green); }
   .hist-pnl.neg { color: var(--red); }
-
+ 
   /* ── STRATEGY TABLE ──────────────────────────────── */
   .strat-row {
     display: flex; align-items: center; gap: 12px;
@@ -403,7 +403,7 @@
   .strat-stats { text-align: right; flex-shrink: 0; width: 90px; }
   .strat-wr { font-size: 14px; font-weight: 700; font-family: var(--mono); }
   .strat-pnl { font-size: 11px; color: var(--gray); }
-
+ 
   /* ── ALERT LOG ───────────────────────────────────── */
   .alert-item {
     display: flex; gap: 12px; padding: 12px 0;
@@ -418,7 +418,7 @@
   .alert-dot.warn   { background: var(--red); }
   .alert-msg { font-size: 12px; line-height: 1.5; }
   .alert-time { font-size: 11px; color: var(--gray2); margin-top: 3px; }
-
+ 
   /* ── MARKET SCANNER ──────────────────────────────── */
   .market-card {
     break-inside: avoid;
@@ -451,7 +451,7 @@
     font-family: var(--mono);
     flex-shrink: 0;
   }
-
+ 
   /* ── LOADING ─────────────────────────────────────── */
   .loading {
     text-align: center; padding: 60px 20px;
@@ -466,7 +466,7 @@
   .loading-dot:nth-child(2) { animation-delay: 0.2s; }
   .loading-dot:nth-child(3) { animation-delay: 0.4s; }
   @keyframes pulse { 0%,100%{opacity:0.3;transform:scale(0.8)} 50%{opacity:1;transform:scale(1.2)} }
-
+ 
   /* ── SECTION HEADER ──────────────────────────────── */
   .section-header {
     display: flex; align-items: center; justify-content: space-between;
@@ -482,12 +482,12 @@
     cursor: pointer; transition: all 0.2s;
   }
   .refresh-btn:hover { border-color: var(--blue); color: var(--blue); }
-
+ 
   /* ── EMPTY STATE ─────────────────────────────────── */
   .empty { text-align: center; padding: 60px 20px; color: var(--gray); }
   .empty-icon { font-size: 32px; margin-bottom: 12px; }
   .empty-text { font-size: 14px; }
-
+ 
   /* ── SCROLLBAR ───────────────────────────────────── */
   ::-webkit-scrollbar { width: 5px; }
   ::-webkit-scrollbar-track { background: var(--bg); }
@@ -495,7 +495,7 @@
 </style>
 </head>
 <body>
-
+ 
 <!-- LOGIN -->
 <div id="login-screen">
   <div class="login-logo">
@@ -514,10 +514,14 @@
     <input class="login-input" type="password" id="pass-input" placeholder="Password" autocomplete="current-password"/>
     <button class="login-btn" id="login-btn">Access Dashboard</button>
     <div class="login-error" id="login-error"></div>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer;font-size:13px;color:var(--gray)">
+      <input type="checkbox" id="remember-me" style="width:15px;height:15px;accent-color:var(--blue);cursor:pointer;"/>
+      Remember me on this device
+    </label>
     <div class="paper-badge-login">PAPER TRADING MODE</div>
   </div>
 </div>
-
+ 
 <!-- APP -->
 <div id="app">
   <header class="header">
@@ -537,7 +541,7 @@
       <div class="header-pnl" id="header-pnl">+$0.00</div>
     </div>
   </header>
-
+ 
   <nav class="nav">
     <button class="nav-btn active" data-page="overview">Overview</button>
     <button class="nav-btn" data-page="positions">Positions</button>
@@ -548,7 +552,7 @@
     <button class="nav-btn" data-page="alerts">Alerts</button>
     <button class="nav-btn" data-page="news">News Feed</button>
   </nav>
-
+ 
   <!-- OVERVIEW -->
   <div class="page active" id="page-overview">
     <div class="section-header">
@@ -562,7 +566,7 @@
       <div class="loading"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>
     </div>
   </div>
-
+ 
   <!-- POSITIONS -->
   <div class="page" id="page-positions">
     <div class="section-header">
@@ -574,7 +578,7 @@
     </div>
     <div class="masonry" id="positions-grid"></div>
   </div>
-
+ 
   <!-- WHALES -->
   <div class="page" id="page-whales">
     <div class="section-header">
@@ -586,7 +590,7 @@
     </div>
     <div class="masonry" id="whales-grid"></div>
   </div>
-
+ 
   <!-- SCANNER -->
   <div class="page" id="page-scanner">
     <div class="section-header">
@@ -598,7 +602,7 @@
     </div>
     <div class="masonry" id="scanner-grid"></div>
   </div>
-
+ 
   <!-- HISTORY -->
   <div class="page" id="page-history">
     <div class="section-header">
@@ -610,7 +614,7 @@
     </div>
     <div class="card" style="padding:0 20px" id="history-list"></div>
   </div>
-
+ 
   <!-- STRATEGY -->
   <div class="page" id="page-strategy">
     <div class="section-header">
@@ -622,7 +626,7 @@
     </div>
     <div class="masonry" id="strategy-grid"></div>
   </div>
-
+ 
   <!-- ALERTS -->
   <div class="page" id="page-alerts">
     <div class="section-header">
@@ -634,7 +638,7 @@
     </div>
     <div class="card" style="padding:0 20px" id="alerts-list"></div>
   </div>
-
+ 
   <!-- NEWS -->
   <div class="page" id="page-news">
     <div class="section-header">
@@ -647,42 +651,64 @@
     <div class="masonry" id="news-grid"></div>
   </div>
 </div>
-
+ 
 <script>
 const API = window.location.origin;
 let password = "";
-
+ 
 // ── AUTH ───────────────────────────────────────────────
-document.getElementById("login-btn").onclick = async () => {
-  const pass = document.getElementById("pass-input").value;
+async function attemptLogin(pass, remember) {
   try {
-    const r = await fetch(`${API}/health`);
-    const data = await r.json();
-    // Verify password against API
     const verify = await fetch(`${API}/api/overview?password=${pass}`);
     if (verify.ok) {
       password = pass;
+      if (remember) localStorage.setItem("vp_pass", pass);
+      else localStorage.removeItem("vp_pass");
       document.getElementById("login-screen").style.display = "none";
       document.getElementById("app").classList.add("visible");
       loadOverview();
+      return true;
     } else {
       document.getElementById("login-error").textContent = "Incorrect password";
+      return false;
     }
   } catch {
     document.getElementById("login-error").textContent = "Cannot connect to server";
+    return false;
   }
+}
+ 
+document.getElementById("login-btn").onclick = () => {
+  const pass = document.getElementById("pass-input").value;
+  const remember = document.getElementById("remember-me").checked;
+  attemptLogin(pass, remember);
 };
+ 
 document.getElementById("pass-input").addEventListener("keydown", e => {
   if (e.key === "Enter") document.getElementById("login-btn").click();
 });
-
+ 
+// Auto-login if saved password exists
+window.addEventListener("load", async () => {
+  const saved = localStorage.getItem("vp_pass");
+  if (saved) {
+    document.getElementById("pass-input").value = saved;
+    document.getElementById("remember-me").checked = true;
+    const ok = await attemptLogin(saved, true);
+    if (!ok) {
+      localStorage.removeItem("vp_pass");
+      document.getElementById("pass-input").value = "";
+    }
+  }
+});
+ 
 // ── API HELPER ─────────────────────────────────────────
 async function api(path) {
   const r = await fetch(`${API}/api${path}`, {headers:{"x-dashboard-password":password}});
   if (!r.ok) throw new Error("API error");
   return r.json();
 }
-
+ 
 // ── NAV ────────────────────────────────────────────────
 document.querySelectorAll(".nav-btn").forEach(btn => {
   btn.addEventListener("click", () => {
@@ -695,7 +721,7 @@ document.querySelectorAll(".nav-btn").forEach(btn => {
     loaders[btn.dataset.page]?.();
   });
 });
-
+ 
 // ── HELPERS ────────────────────────────────────────────
 const fmt$ = n => n>=0?`+$${n.toFixed(2)}`:`-$${Math.abs(n).toFixed(2)}`;
 const fmtPct = n => `${n>=0?"+":""}${n.toFixed(1)}%`;
@@ -708,7 +734,7 @@ const timeAgo = s => {
   return `${Math.floor(d/86400)}d ago`;
 };
 const shortAddr = a => a?`${a.slice(0,6)}...${a.slice(-4)}`:"?";
-
+ 
 // ── OVERVIEW ───────────────────────────────────────────
 async function loadOverview() {
   const grid = document.getElementById("overview-grid");
@@ -718,11 +744,11 @@ async function loadOverview() {
     const pnlEl = document.getElementById("header-pnl");
     pnlEl.textContent = fmt$(d.pnl);
     pnlEl.className = `header-pnl ${d.pnl>=0?"pos":"neg"}`;
-
+ 
     const pnlColor = d.pnl>=0?"val-green":"val-red";
     const lossColor = d.loss>=d.lossHalt*0.8?"val-red":d.loss>=d.lossHalt*0.5?"val-amber":"val-white";
     const wrColor   = d.winRate>=0.65?"val-green":d.winRate>=0.50?"val-blue":"val-red";
-
+ 
     grid.innerHTML = `
       <div class="card">
         <div class="card-label">Portfolio Value</div>
@@ -733,13 +759,13 @@ async function loadOverview() {
           <div class="progress-bar"><div class="progress-fill blue" style="width:${Math.min(100,(d.deployed/d.budget)*100)}%"></div></div>
         </div>
       </div>
-
+ 
       <div class="card">
         <div class="card-label">Total P&L</div>
         <div class="card-value ${pnlColor}">${fmt$(d.pnl)}</div>
         <div class="card-sub">Since inception • Paper</div>
       </div>
-
+ 
       <div class="card">
         <div class="card-label">Open Positions</div>
         <div class="card-value val-white">${d.openCount}<span style="font-size:18px;color:var(--gray)"> / ${d.maxPositions}</span></div>
@@ -747,7 +773,7 @@ async function loadOverview() {
           <div class="progress-bar"><div class="progress-fill ${d.openCount>=d.maxPositions?"red":"blue"}" style="width:${(d.openCount/d.maxPositions)*100}%"></div></div>
         </div>
       </div>
-
+ 
       <div class="card">
         <div class="card-label">Loss Guard</div>
         <div class="card-value ${lossColor}">$${d.loss.toFixed(2)}</div>
@@ -756,13 +782,13 @@ async function loadOverview() {
           <div class="progress-bar"><div class="progress-fill ${d.loss>=d.lossHalt*0.8?"red":d.loss>=d.lossHalt*0.5?"amber":"green"}" style="width:${Math.min(100,(d.loss/d.lossHalt)*100)}%"></div></div>
         </div>
       </div>
-
+ 
       <div class="card">
         <div class="card-label">Win Rate</div>
         <div class="card-value ${wrColor}">${d.totalTrades>0?(d.winRate*100).toFixed(1):"-"}<span style="font-size:18px">%</span></div>
         <div class="card-sub">${d.totalTrades} trades closed</div>
       </div>
-
+ 
       <div class="card">
         <div class="card-label">Today's Trades</div>
         <div class="card-value val-white">${d.todayTrades}<span style="font-size:18px;color:var(--gray)"> / ${d.maxDailyTrades}</span></div>
@@ -771,19 +797,19 @@ async function loadOverview() {
           <div class="progress-bar"><div class="progress-fill ${d.todayTrades>=d.maxDailyTrades?"red":"blue"}" style="width:${(d.todayTrades/d.maxDailyTrades)*100}%"></div></div>
         </div>
       </div>
-
+ 
       <div class="card">
         <div class="card-label">Available Budget</div>
         <div class="card-value val-blue">$${d.available.toFixed(2)}</div>
         <div class="card-sub">Ready to deploy</div>
       </div>
-
+ 
       <div class="card">
         <div class="card-label">Agent Status</div>
         <div class="card-value" style="font-size:18px;color:${d.paused?"var(--amber)":"var(--green)"}">${d.paused?"PAUSED":"ACTIVE"}</div>
         <div class="card-sub">${d.paper?"Paper Trading Mode":"LIVE TRADING"}</div>
       </div>
-
+ 
       <div class="card">
         <div class="card-label">Guardrails</div>
         <div class="card-value val-white" style="font-size:22px">14</div>
@@ -794,7 +820,7 @@ async function loadOverview() {
     grid.innerHTML = `<div class="empty"><div class="empty-icon">⚡</div><div class="empty-text">Could not load data. Is the agent running?</div></div>`;
   }
 }
-
+ 
 // ── POSITIONS ─────────────────────────────────────────
 async function loadPositions() {
   const grid = document.getElementById("positions-grid");
@@ -864,7 +890,7 @@ async function loadPositions() {
     grid.innerHTML = `<div class="empty"><div class="empty-text">Failed to load positions</div></div>`;
   }
 }
-
+ 
 // ── WHALES ────────────────────────────────────────────
 async function loadWhales() {
   const grid = document.getElementById("whales-grid");
@@ -911,7 +937,7 @@ async function loadWhales() {
     grid.innerHTML = `<div class="empty"><div class="empty-text">Failed to load whales</div></div>`;
   }
 }
-
+ 
 // ── MARKET SCANNER ────────────────────────────────────
 async function loadScanner() {
   const grid = document.getElementById("scanner-grid");
@@ -955,7 +981,7 @@ async function loadScanner() {
     grid.innerHTML = `<div class="empty"><div class="empty-text">Failed to load markets</div></div>`;
   }
 }
-
+ 
 // ── HISTORY ───────────────────────────────────────────
 async function loadHistory() {
   const list = document.getElementById("history-list");
@@ -984,7 +1010,7 @@ async function loadHistory() {
     list.innerHTML = `<div class="empty"><div class="empty-text">Failed to load history</div></div>`;
   }
 }
-
+ 
 // ── STRATEGY ──────────────────────────────────────────
 async function loadStrategy() {
   const grid = document.getElementById("strategy-grid");
@@ -1036,7 +1062,7 @@ async function loadStrategy() {
     grid.innerHTML = `<div class="empty"><div class="empty-text">Failed to load strategy data</div></div>`;
   }
 }
-
+ 
 // ── ALERTS ────────────────────────────────────────────
 async function loadAlerts() {
   const list = document.getElementById("alerts-list");
@@ -1062,7 +1088,7 @@ async function loadAlerts() {
     list.innerHTML = `<div class="empty"><div class="empty-text">Failed to load alerts</div></div>`;
   }
 }
-
+ 
 // ── NEWS FEED ─────────────────────────────────────────
 async function loadNews() {
   const grid = document.getElementById("news-grid");
@@ -1112,7 +1138,7 @@ async function loadNews() {
     grid.innerHTML = `<div class="empty"><div class="empty-text">Failed to load news</div></div>`;
   }
 }
-
+ 
 // Auto-refresh overview every 60 seconds
 setInterval(()=>{ if(document.querySelector(".nav-btn.active")?.dataset?.page==="overview") loadOverview(); }, 60000);
 </script>
