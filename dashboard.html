@@ -1,0 +1,1120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<meta name="theme-color" content="#08090E"/>
+<link rel="manifest" href="/manifest.json"/>
+<title>VeraPimpo</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,300&family=DM+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg:        #08090E;
+    --bg2:       #0D0F1A;
+    --bg3:       #12151F;
+    --border:    #1E2235;
+    --border2:   #252A3A;
+    --white:     #F0F2F8;
+    --gray:      #636B80;
+    --gray2:     #4A5060;
+    --blue:      #58A6FF;
+    --blue2:     #1E3A5F;
+    --blue3:     #0D2137;
+    --green:     #3FB950;
+    --red:       #F85149;
+    --amber:     #D29922;
+    --purple:    #8957E5;
+    --radius:    14px;
+    --radius-sm: 8px;
+    --font:      'DM Sans', sans-serif;
+    --mono:      'DM Mono', monospace;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--white);
+    font-family: var(--font);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── LOGIN SCREEN ─────────────────────────────────── */
+  #login-screen {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000;
+    flex-direction: column;
+    gap: 0;
+  }
+  .login-logo {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 48px;
+  }
+  .login-emblem {
+    width: 52px; height: 52px;
+  }
+  .login-wordmark {
+    font-size: 28px; font-weight: 600; letter-spacing: -0.5px;
+  }
+  .login-wordmark span { color: var(--blue); }
+  .login-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 40px;
+    width: 100%;
+    max-width: 380px;
+  }
+  .login-title { font-size: 15px; font-weight: 500; color: var(--gray); margin-bottom: 24px; }
+  .login-input {
+    width: 100%;
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    color: var(--white);
+    font-family: var(--mono);
+    font-size: 14px;
+    outline: none;
+    margin-bottom: 14px;
+    transition: border-color 0.2s;
+  }
+  .login-input:focus { border-color: var(--blue); }
+  .login-btn {
+    width: 100%;
+    background: var(--blue);
+    color: #000;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 14px;
+    font-family: var(--font);
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  .login-btn:hover { opacity: 0.85; }
+  .login-error { color: var(--red); font-size: 13px; margin-top: 10px; text-align: center; }
+  .paper-badge-login {
+    margin-top: 20px;
+    background: rgba(88,166,255,0.1);
+    border: 1px solid rgba(88,166,255,0.2);
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 12px;
+    color: var(--blue);
+    text-align: center;
+    letter-spacing: 1px;
+    font-weight: 600;
+  }
+
+  /* ── MAIN LAYOUT ──────────────────────────────────── */
+  #app { display: none; }
+  #app.visible { display: block; }
+
+  .header {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(8,9,14,0.85);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    height: 64px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .header-logo {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 18px; font-weight: 600; letter-spacing: -0.3px;
+  }
+  .header-logo span { color: var(--blue); }
+  .header-logo svg { width: 32px; height: 32px; }
+  .paper-badge {
+    background: rgba(88,166,255,0.12);
+    border: 1px solid rgba(88,166,255,0.25);
+    color: var(--blue);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    padding: 4px 10px;
+    border-radius: 20px;
+  }
+  .header-right { display: flex; align-items: center; gap: 16px; }
+  .header-pnl {
+    font-size: 15px; font-weight: 600;
+    font-family: var(--mono);
+  }
+  .header-pnl.pos { color: var(--green); }
+  .header-pnl.neg { color: var(--red); }
+
+  /* ── NAV ─────────────────────────────────────────── */
+  .nav {
+    display: flex; gap: 2px;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav-btn {
+    padding: 14px 18px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--gray);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+    font-family: var(--font);
+  }
+  .nav-btn:hover { color: var(--white); }
+  .nav-btn.active {
+    color: var(--white);
+    border-bottom-color: var(--blue);
+  }
+
+  /* ── PAGES ───────────────────────────────────────── */
+  .page { display: none; padding: 28px 24px; }
+  .page.active { display: block; }
+
+  /* ── MASONRY GRID ────────────────────────────────── */
+  .masonry {
+    columns: 3;
+    column-gap: 18px;
+  }
+  @media(max-width:1100px){.masonry{columns:2;}}
+  @media(max-width:640px){.masonry{columns:1;}}
+
+  .card {
+    break-inside: avoid;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 18px;
+    transition: border-color 0.2s, transform 0.2s;
+    animation: cardIn 0.4s ease both;
+  }
+  .card:hover { border-color: var(--border2); transform: translateY(-2px); }
+  @keyframes cardIn { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+
+  .card-label {
+    font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
+    color: var(--gray); text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .card-value {
+    font-size: 32px; font-weight: 700;
+    font-family: var(--mono);
+    letter-spacing: -1px;
+    line-height: 1;
+  }
+  .card-sub { font-size: 12px; color: var(--gray); margin-top: 6px; }
+  .card-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; line-height: 1.3; }
+  .card-body { font-size: 13px; color: var(--gray); line-height: 1.6; }
+
+  /* Values colored */
+  .val-green { color: var(--green); }
+  .val-red   { color: var(--red); }
+  .val-blue  { color: var(--blue); }
+  .val-amber { color: var(--amber); }
+  .val-white { color: var(--white); }
+
+  /* ── PROGRESS BAR ────────────────────────────────── */
+  .progress-wrap { margin-top: 12px; }
+  .progress-label { display: flex; justify-content: space-between; font-size: 12px; color: var(--gray); margin-bottom: 5px; }
+  .progress-bar { height: 4px; background: var(--bg3); border-radius: 2px; overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 2px; transition: width 0.5s ease; }
+  .progress-fill.green { background: var(--green); }
+  .progress-fill.blue  { background: var(--blue); }
+  .progress-fill.red   { background: var(--red); }
+  .progress-fill.amber { background: var(--amber); }
+
+  /* ── POSITION CARD ───────────────────────────────── */
+  .position-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    margin-bottom: 14px;
+    break-inside: avoid;
+    animation: cardIn 0.4s ease both;
+  }
+  .position-question {
+    font-size: 14px; font-weight: 600; line-height: 1.4;
+    margin-bottom: 12px;
+  }
+  .position-meta {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    margin-bottom: 12px;
+  }
+  .position-meta-item { font-size: 11px; }
+  .position-meta-item .meta-label { color: var(--gray); margin-bottom: 2px; }
+  .position-meta-item .meta-val { font-family: var(--mono); font-size: 13px; font-weight: 500; }
+  .position-agents { display: flex; flex-wrap: wrap; gap: 5px; }
+  .agent-chip {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.5px;
+    padding: 3px 8px; border-radius: 4px;
+    background: var(--blue3);
+    border: 1px solid var(--blue2);
+    color: var(--blue);
+  }
+
+  /* ── PROBABILITY BAR ─────────────────────────────── */
+  .prob-bar-wrap { margin: 10px 0; }
+  .prob-bar-track { height: 6px; background: var(--bg3); border-radius: 3px; position: relative; overflow: hidden; }
+  .prob-bar-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--blue), var(--green)); }
+  .prob-bar-target { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--amber); }
+  .prob-bar-stop { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--red); }
+
+  /* ── WHALE CARD ──────────────────────────────────── */
+  .whale-tier {
+    display: inline-block;
+    font-size: 10px; font-weight: 700; letter-spacing: 1px;
+    padding: 3px 8px; border-radius: 4px;
+    margin-bottom: 10px;
+  }
+  .whale-tier.t1 { background: rgba(217,185,47,0.15); color: #D9B92F; border: 1px solid rgba(217,185,47,0.3); }
+  .whale-tier.t2 { background: rgba(88,166,255,0.12); color: var(--blue); border: 1px solid rgba(88,166,255,0.25); }
+  .whale-tier.t3 { background: rgba(99,107,128,0.15); color: var(--gray); border: 1px solid var(--border); }
+  .whale-addr { font-family: var(--mono); font-size: 12px; color: var(--gray2); margin-bottom: 8px; }
+  .whale-stats { display: grid; grid-template-columns: repeat(3,1fr); gap: 6px; margin-top: 10px; }
+  .whale-stat { text-align: center; }
+  .whale-stat-val { font-size: 15px; font-weight: 700; font-family: var(--mono); }
+  .whale-stat-lbl { font-size: 10px; color: var(--gray); margin-top: 2px; }
+  .confirmed-badge {
+    font-size: 10px; font-weight: 600;
+    background: rgba(63,185,80,0.12);
+    color: var(--green);
+    border: 1px solid rgba(63,185,80,0.25);
+    padding: 2px 8px; border-radius: 4px;
+    margin-left: 8px;
+  }
+  .pending-badge {
+    font-size: 10px; font-weight: 600;
+    background: rgba(210,153,34,0.12);
+    color: var(--amber);
+    border: 1px solid rgba(210,153,34,0.25);
+    padding: 2px 8px; border-radius: 4px;
+    margin-left: 8px;
+  }
+
+  /* ── NEWS CARD ───────────────────────────────────── */
+  .news-image {
+    width: 100%; aspect-ratio: 16/9;
+    object-fit: cover;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    background: var(--bg3);
+  }
+  .news-source {
+    font-size: 10px; font-weight: 700; letter-spacing: 1px;
+    color: var(--gray); text-transform: uppercase;
+    margin-bottom: 6px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .news-status {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+    padding: 2px 8px; border-radius: 4px;
+  }
+  .news-status.triggered {
+    background: rgba(63,185,80,0.12);
+    color: var(--green);
+    border: 1px solid rgba(63,185,80,0.2);
+  }
+  .news-status.monitored {
+    background: rgba(88,166,255,0.1);
+    color: var(--blue);
+    border: 1px solid rgba(88,166,255,0.2);
+  }
+  .news-headline { font-size: 15px; font-weight: 600; line-height: 1.4; margin-bottom: 8px; }
+  .news-summary { font-size: 13px; color: var(--gray); line-height: 1.6; margin-bottom: 10px; }
+  .news-market {
+    font-size: 11px; color: var(--blue);
+    background: rgba(88,166,255,0.08);
+    padding: 6px 10px; border-radius: 6px;
+    margin-top: 8px;
+  }
+  .news-time { font-size: 11px; color: var(--gray2); margin-top: 8px; }
+  .news-link {
+    display: inline-block;
+    margin-top: 10px;
+    font-size: 12px; font-weight: 600;
+    color: var(--blue);
+    text-decoration: none;
+  }
+  .reddit-header {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 10px;
+  }
+  .reddit-icon {
+    width: 20px; height: 20px;
+    background: #FF4500;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 900; color: white;
+  }
+  .reddit-sub { font-size: 12px; color: var(--gray); font-weight: 500; }
+  .reddit-score {
+    margin-left: auto;
+    font-size: 11px; color: var(--amber);
+    font-family: var(--mono);
+  }
+  .reddit-text { font-size: 13px; line-height: 1.6; color: var(--gray); margin-top: 8px; }
+
+  /* ── HISTORY TABLE ───────────────────────────────── */
+  .hist-item {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .hist-item:last-child { border-bottom: none; }
+  .hist-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    margin-top: 5px; flex-shrink: 0;
+  }
+  .hist-dot.win { background: var(--green); }
+  .hist-dot.loss { background: var(--red); }
+  .hist-question { font-size: 13px; font-weight: 500; line-height: 1.3; margin-bottom: 4px; }
+  .hist-meta { font-size: 11px; color: var(--gray); }
+  .hist-pnl {
+    margin-left: auto; flex-shrink: 0;
+    font-family: var(--mono); font-size: 14px; font-weight: 600;
+    text-align: right;
+  }
+  .hist-pnl.pos { color: var(--green); }
+  .hist-pnl.neg { color: var(--red); }
+
+  /* ── STRATEGY TABLE ──────────────────────────────── */
+  .strat-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 0; border-bottom: 1px solid var(--border);
+  }
+  .strat-row:last-child { border-bottom: none; }
+  .strat-name { font-size: 13px; font-weight: 600; width: 130px; flex-shrink: 0; }
+  .strat-bar-wrap { flex: 1; }
+  .strat-bar { height: 4px; background: var(--bg3); border-radius: 2px; }
+  .strat-fill { height: 100%; border-radius: 2px; background: var(--blue); transition: width 0.8s ease; }
+  .strat-stats { text-align: right; flex-shrink: 0; width: 90px; }
+  .strat-wr { font-size: 14px; font-weight: 700; font-family: var(--mono); }
+  .strat-pnl { font-size: 11px; color: var(--gray); }
+
+  /* ── ALERT LOG ───────────────────────────────────── */
+  .alert-item {
+    display: flex; gap: 12px; padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .alert-item:last-child { border-bottom: none; }
+  .alert-dot { width: 6px; height: 6px; border-radius: 50%; margin-top: 6px; flex-shrink: 0; }
+  .alert-dot.trade  { background: var(--green); }
+  .alert-dot.exit   { background: var(--blue); }
+  .alert-dot.whale  { background: #D9B92F; }
+  .alert-dot.scan   { background: var(--gray); }
+  .alert-dot.warn   { background: var(--red); }
+  .alert-msg { font-size: 12px; line-height: 1.5; }
+  .alert-time { font-size: 11px; color: var(--gray2); margin-top: 3px; }
+
+  /* ── MARKET SCANNER ──────────────────────────────── */
+  .market-card {
+    break-inside: avoid;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    margin-bottom: 14px;
+    animation: cardIn 0.4s ease both;
+    transition: border-color 0.2s;
+  }
+  .market-card:hover { border-color: var(--border2); }
+  .market-category {
+    font-size: 10px; font-weight: 700; letter-spacing: 1px;
+    color: var(--gray); text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .market-question { font-size: 14px; font-weight: 600; line-height: 1.4; margin-bottom: 12px; }
+  .market-price-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .market-yes { font-size: 22px; font-weight: 700; font-family: var(--mono); color: var(--green); }
+  .market-no  { font-size: 14px; color: var(--red); font-family: var(--mono); }
+  .market-liq { font-size: 11px; color: var(--gray); margin-left: auto; }
+  .market-score-ring {
+    display: flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    border: 2px solid var(--blue);
+    font-size: 12px; font-weight: 700;
+    color: var(--blue);
+    font-family: var(--mono);
+    flex-shrink: 0;
+  }
+
+  /* ── LOADING ─────────────────────────────────────── */
+  .loading {
+    text-align: center; padding: 60px 20px;
+    color: var(--gray);
+  }
+  .loading-dot {
+    display: inline-block;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--blue); margin: 0 3px;
+    animation: pulse 1s ease infinite;
+  }
+  .loading-dot:nth-child(2) { animation-delay: 0.2s; }
+  .loading-dot:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes pulse { 0%,100%{opacity:0.3;transform:scale(0.8)} 50%{opacity:1;transform:scale(1.2)} }
+
+  /* ── SECTION HEADER ──────────────────────────────── */
+  .section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 20px;
+  }
+  .section-title { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
+  .section-sub { font-size: 13px; color: var(--gray); margin-top: 2px; }
+  .refresh-btn {
+    background: var(--bg3); border: 1px solid var(--border2);
+    color: var(--gray); font-family: var(--font);
+    font-size: 12px; padding: 7px 14px;
+    border-radius: var(--radius-sm);
+    cursor: pointer; transition: all 0.2s;
+  }
+  .refresh-btn:hover { border-color: var(--blue); color: var(--blue); }
+
+  /* ── EMPTY STATE ─────────────────────────────────── */
+  .empty { text-align: center; padding: 60px 20px; color: var(--gray); }
+  .empty-icon { font-size: 32px; margin-bottom: 12px; }
+  .empty-text { font-size: 14px; }
+
+  /* ── SCROLLBAR ───────────────────────────────────── */
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-screen">
+  <div class="login-logo">
+    <svg class="login-emblem" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="44" fill="none" stroke="#58A6FF" stroke-width="2.5"/>
+      <circle cx="50" cy="50" r="32" fill="none" stroke="#636B80" stroke-width="1.5"/>
+      <path d="M22 50 Q32 35 42 50 Q50 58 58 40 Q68 22 78 50" fill="none" stroke="#58A6FF" stroke-width="2.5" stroke-linecap="round"/>
+      <circle cx="50" cy="50" r="3.5" fill="#58A6FF"/>
+      <line x1="50" y1="6" x2="50" y2="14" stroke="#636B80" stroke-width="2" stroke-linecap="round"/>
+      <line x1="94" y1="50" x2="86" y2="50" stroke="#636B80" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+    <span class="login-wordmark">Vera<span>Pimpo</span></span>
+  </div>
+  <div class="login-card">
+    <div class="login-title">Enter your access password to continue</div>
+    <input class="login-input" type="password" id="pass-input" placeholder="Password" autocomplete="current-password"/>
+    <button class="login-btn" id="login-btn">Access Dashboard</button>
+    <div class="login-error" id="login-error"></div>
+    <div class="paper-badge-login">PAPER TRADING MODE</div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <header class="header">
+    <div class="header-logo">
+      <svg viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="44" fill="none" stroke="#58A6FF" stroke-width="3"/>
+        <circle cx="50" cy="50" r="32" fill="none" stroke="#636B80" stroke-width="1.5"/>
+        <path d="M22 50 Q32 35 42 50 Q50 58 58 40 Q68 22 78 50" fill="none" stroke="#58A6FF" stroke-width="3" stroke-linecap="round"/>
+        <circle cx="50" cy="50" r="3.5" fill="#58A6FF"/>
+        <line x1="50" y1="6" x2="50" y2="14" stroke="#636B80" stroke-width="2.5" stroke-linecap="round"/>
+        <line x1="94" y1="50" x2="86" y2="50" stroke="#636B80" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      Vera<span>Pimpo</span>
+    </div>
+    <div class="header-right">
+      <div class="paper-badge">PAPER MODE</div>
+      <div class="header-pnl" id="header-pnl">+$0.00</div>
+    </div>
+  </header>
+
+  <nav class="nav">
+    <button class="nav-btn active" data-page="overview">Overview</button>
+    <button class="nav-btn" data-page="positions">Positions</button>
+    <button class="nav-btn" data-page="whales">Whale Tracker</button>
+    <button class="nav-btn" data-page="scanner">Market Scanner</button>
+    <button class="nav-btn" data-page="history">Trade History</button>
+    <button class="nav-btn" data-page="strategy">Strategy</button>
+    <button class="nav-btn" data-page="alerts">Alerts</button>
+    <button class="nav-btn" data-page="news">News Feed</button>
+  </nav>
+
+  <!-- OVERVIEW -->
+  <div class="page active" id="page-overview">
+    <div class="section-header">
+      <div>
+        <div class="section-title">Overview</div>
+        <div class="section-sub">Live portfolio snapshot</div>
+      </div>
+      <button class="refresh-btn" onclick="loadOverview()">Refresh</button>
+    </div>
+    <div class="masonry" id="overview-grid">
+      <div class="loading"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>
+    </div>
+  </div>
+
+  <!-- POSITIONS -->
+  <div class="page" id="page-positions">
+    <div class="section-header">
+      <div>
+        <div class="section-title">Open Positions</div>
+        <div class="section-sub" id="pos-count">Loading...</div>
+      </div>
+      <button class="refresh-btn" onclick="loadPositions()">Refresh</button>
+    </div>
+    <div class="masonry" id="positions-grid"></div>
+  </div>
+
+  <!-- WHALES -->
+  <div class="page" id="page-whales">
+    <div class="section-header">
+      <div>
+        <div class="section-title">Whale Tracker</div>
+        <div class="section-sub">Top 50 ranked wallets — refreshed daily</div>
+      </div>
+      <button class="refresh-btn" onclick="loadWhales()">Refresh</button>
+    </div>
+    <div class="masonry" id="whales-grid"></div>
+  </div>
+
+  <!-- SCANNER -->
+  <div class="page" id="page-scanner">
+    <div class="section-header">
+      <div>
+        <div class="section-title">Market Scanner</div>
+        <div class="section-sub">Top 35 of 500+ markets</div>
+      </div>
+      <button class="refresh-btn" onclick="loadScanner()">Refresh</button>
+    </div>
+    <div class="masonry" id="scanner-grid"></div>
+  </div>
+
+  <!-- HISTORY -->
+  <div class="page" id="page-history">
+    <div class="section-header">
+      <div>
+        <div class="section-title">Trade History</div>
+        <div class="section-sub">All closed paper trades</div>
+      </div>
+      <button class="refresh-btn" onclick="loadHistory()">Refresh</button>
+    </div>
+    <div class="card" style="padding:0 20px" id="history-list"></div>
+  </div>
+
+  <!-- STRATEGY -->
+  <div class="page" id="page-strategy">
+    <div class="section-header">
+      <div>
+        <div class="section-title">Strategy Performance</div>
+        <div class="section-sub">Win rate and P&L per agent</div>
+      </div>
+      <button class="refresh-btn" onclick="loadStrategy()">Refresh</button>
+    </div>
+    <div class="masonry" id="strategy-grid"></div>
+  </div>
+
+  <!-- ALERTS -->
+  <div class="page" id="page-alerts">
+    <div class="section-header">
+      <div>
+        <div class="section-title">Alerts Log</div>
+        <div class="section-sub">All system notifications</div>
+      </div>
+      <button class="refresh-btn" onclick="loadAlerts()">Refresh</button>
+    </div>
+    <div class="card" style="padding:0 20px" id="alerts-list"></div>
+  </div>
+
+  <!-- NEWS -->
+  <div class="page" id="page-news">
+    <div class="section-header">
+      <div>
+        <div class="section-title">News Feed</div>
+        <div class="section-sub">Articles and Reddit posts that influenced trades</div>
+      </div>
+      <button class="refresh-btn" onclick="loadNews()">Refresh</button>
+    </div>
+    <div class="masonry" id="news-grid"></div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+let password = "";
+
+// ── AUTH ───────────────────────────────────────────────
+document.getElementById("login-btn").onclick = async () => {
+  const pass = document.getElementById("pass-input").value;
+  try {
+    const r = await fetch(`${API}/health`);
+    const data = await r.json();
+    // Verify password against API
+    const verify = await fetch(`${API}/api/overview?password=${pass}`);
+    if (verify.ok) {
+      password = pass;
+      document.getElementById("login-screen").style.display = "none";
+      document.getElementById("app").classList.add("visible");
+      loadOverview();
+    } else {
+      document.getElementById("login-error").textContent = "Incorrect password";
+    }
+  } catch {
+    document.getElementById("login-error").textContent = "Cannot connect to server";
+  }
+};
+document.getElementById("pass-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") document.getElementById("login-btn").click();
+});
+
+// ── API HELPER ─────────────────────────────────────────
+async function api(path) {
+  const r = await fetch(`${API}/api${path}`, {headers:{"x-dashboard-password":password}});
+  if (!r.ok) throw new Error("API error");
+  return r.json();
+}
+
+// ── NAV ────────────────────────────────────────────────
+document.querySelectorAll(".nav-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".nav-btn").forEach(b=>b.classList.remove("active"));
+    document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));
+    btn.classList.add("active");
+    const page = document.getElementById(`page-${btn.dataset.page}`);
+    page.classList.add("active");
+    const loaders = {overview:loadOverview,positions:loadPositions,whales:loadWhales,scanner:loadScanner,history:loadHistory,strategy:loadStrategy,alerts:loadAlerts,news:loadNews};
+    loaders[btn.dataset.page]?.();
+  });
+});
+
+// ── HELPERS ────────────────────────────────────────────
+const fmt$ = n => n>=0?`+$${n.toFixed(2)}`:`-$${Math.abs(n).toFixed(2)}`;
+const fmtPct = n => `${n>=0?"+":""}${n.toFixed(1)}%`;
+const fmtProb = n => `${(n*100).toFixed(1)}%`;
+const timeAgo = s => {
+  const d = (Date.now()-new Date(s).getTime())/1000;
+  if(d<60) return "just now";
+  if(d<3600) return `${Math.floor(d/60)}m ago`;
+  if(d<86400) return `${Math.floor(d/3600)}h ago`;
+  return `${Math.floor(d/86400)}d ago`;
+};
+const shortAddr = a => a?`${a.slice(0,6)}...${a.slice(-4)}`:"?";
+
+// ── OVERVIEW ───────────────────────────────────────────
+async function loadOverview() {
+  const grid = document.getElementById("overview-grid");
+  grid.innerHTML = `<div class="loading"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>`;
+  try {
+    const d = await api("/overview");
+    const pnlEl = document.getElementById("header-pnl");
+    pnlEl.textContent = fmt$(d.pnl);
+    pnlEl.className = `header-pnl ${d.pnl>=0?"pos":"neg"}`;
+
+    const pnlColor = d.pnl>=0?"val-green":"val-red";
+    const lossColor = d.loss>=d.lossHalt*0.8?"val-red":d.loss>=d.lossHalt*0.5?"val-amber":"val-white";
+    const wrColor   = d.winRate>=0.65?"val-green":d.winRate>=0.50?"val-blue":"val-red";
+
+    grid.innerHTML = `
+      <div class="card">
+        <div class="card-label">Portfolio Value</div>
+        <div class="card-value val-white">$${(d.budget).toFixed(2)}</div>
+        <div class="card-sub">Budget cap</div>
+        <div class="progress-wrap">
+          <div class="progress-label"><span>Deployed</span><span>$${d.deployed.toFixed(2)} / $${d.budget}</span></div>
+          <div class="progress-bar"><div class="progress-fill blue" style="width:${Math.min(100,(d.deployed/d.budget)*100)}%"></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Total P&L</div>
+        <div class="card-value ${pnlColor}">${fmt$(d.pnl)}</div>
+        <div class="card-sub">Since inception • Paper</div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Open Positions</div>
+        <div class="card-value val-white">${d.openCount}<span style="font-size:18px;color:var(--gray)"> / ${d.maxPositions}</span></div>
+        <div class="progress-wrap">
+          <div class="progress-bar"><div class="progress-fill ${d.openCount>=d.maxPositions?"red":"blue"}" style="width:${(d.openCount/d.maxPositions)*100}%"></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Loss Guard</div>
+        <div class="card-value ${lossColor}">$${d.loss.toFixed(2)}</div>
+        <div class="card-sub">Halt at $${d.lossHalt}</div>
+        <div class="progress-wrap">
+          <div class="progress-bar"><div class="progress-fill ${d.loss>=d.lossHalt*0.8?"red":d.loss>=d.lossHalt*0.5?"amber":"green"}" style="width:${Math.min(100,(d.loss/d.lossHalt)*100)}%"></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Win Rate</div>
+        <div class="card-value ${wrColor}">${d.totalTrades>0?(d.winRate*100).toFixed(1):"-"}<span style="font-size:18px">%</span></div>
+        <div class="card-sub">${d.totalTrades} trades closed</div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Today's Trades</div>
+        <div class="card-value val-white">${d.todayTrades}<span style="font-size:18px;color:var(--gray)"> / ${d.maxDailyTrades}</span></div>
+        <div class="card-sub">Daily limit</div>
+        <div class="progress-wrap">
+          <div class="progress-bar"><div class="progress-fill ${d.todayTrades>=d.maxDailyTrades?"red":"blue"}" style="width:${(d.todayTrades/d.maxDailyTrades)*100}%"></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Available Budget</div>
+        <div class="card-value val-blue">$${d.available.toFixed(2)}</div>
+        <div class="card-sub">Ready to deploy</div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Agent Status</div>
+        <div class="card-value" style="font-size:18px;color:${d.paused?"var(--amber)":"var(--green)"}">${d.paused?"PAUSED":"ACTIVE"}</div>
+        <div class="card-sub">${d.paper?"Paper Trading Mode":"LIVE TRADING"}</div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Guardrails</div>
+        <div class="card-value val-white" style="font-size:22px">14</div>
+        <div class="card-sub">$${d.budget} budget | $50 max/trade | $${d.lossHalt} halt | 85% ceiling | 15% floor | $10k liquidity | 10 trades/day</div>
+      </div>
+    `;
+  } catch(e) {
+    grid.innerHTML = `<div class="empty"><div class="empty-icon">⚡</div><div class="empty-text">Could not load data. Is the agent running?</div></div>`;
+  }
+}
+
+// ── POSITIONS ─────────────────────────────────────────
+async function loadPositions() {
+  const grid = document.getElementById("positions-grid");
+  grid.innerHTML = `<div class="loading"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>`;
+  try {
+    const positions = await api("/positions");
+    document.getElementById("pos-count").textContent = `${positions.length} open positions`;
+    if (!positions.length) {
+      grid.innerHTML = `<div class="empty"><div class="empty-icon">📊</div><div class="empty-text">No open positions. Agent is scanning markets.</div></div>`;
+      return;
+    }
+    grid.innerHTML = positions.map((p,i) => {
+      const pnl = (p.current_price - p.entry_price) * p.shares;
+      const pnlPct = ((p.current_price - p.entry_price)/p.entry_price)*100;
+      const agents = (p.agents_fired||"").split(",").filter(Boolean);
+      const targetPct = ((p.target_price - p.entry_price)/(1-p.entry_price))*100;
+      const progressPct = Math.max(0,Math.min(100,((p.current_price-p.entry_price)/(p.target_price-p.entry_price))*100));
+      const hoursLeft   = p.closes_at ? (new Date(p.closes_at)-new Date())/3600000 : 999;
+      return `
+        <div class="position-card" style="animation-delay:${i*0.05}s">
+          <div class="position-question">${p.market_question}</div>
+          <div class="position-meta">
+            <div class="position-meta-item">
+              <div class="meta-label">Entry</div>
+              <div class="meta-val">${fmtProb(p.entry_price)}</div>
+            </div>
+            <div class="position-meta-item">
+              <div class="meta-label">Current</div>
+              <div class="meta-val" style="color:${p.current_price>p.entry_price?"var(--green)":"var(--red)"}">${fmtProb(p.current_price)}</div>
+            </div>
+            <div class="position-meta-item">
+              <div class="meta-label">P&L</div>
+              <div class="meta-val" style="color:${pnl>=0?"var(--green)":"var(--red)"}">${fmt$(pnl)} (${fmtPct(pnlPct)})</div>
+            </div>
+            <div class="position-meta-item">
+              <div class="meta-label">Size</div>
+              <div class="meta-val">$${p.size}</div>
+            </div>
+            <div class="position-meta-item">
+              <div class="meta-label">Target</div>
+              <div class="meta-val val-amber">${fmtProb(p.target_price)}</div>
+            </div>
+            <div class="position-meta-item">
+              <div class="meta-label">Stop</div>
+              <div class="meta-val val-red">${fmtProb(p.stop_price)}</div>
+            </div>
+          </div>
+          <div class="prob-bar-wrap">
+            <div class="prob-bar-track">
+              <div class="prob-bar-fill" style="width:${Math.min(100,p.current_price*100)}%"></div>
+              <div class="prob-bar-target" style="left:${p.target_price*100}%"></div>
+              <div class="prob-bar-stop" style="left:${p.stop_price*100}%"></div>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--gray);margin-top:6px">
+            <span>Progress to target: ${progressPct.toFixed(0)}%</span>
+            <span style="color:${hoursLeft<6?"var(--red)":hoursLeft<24?"var(--amber)":"var(--gray)"}">${hoursLeft<999?`${hoursLeft.toFixed(0)}h left`:"No deadline"}</span>
+          </div>
+          <div class="position-agents" style="margin-top:12px">
+            ${agents.map(a=>`<span class="agent-chip">${a}</span>`).join("")}
+            <span class="agent-chip" style="background:rgba(99,107,128,0.15);border-color:var(--border2);color:var(--gray)">${p.layer}</span>
+          </div>
+          <div style="font-size:11px;color:var(--gray2);margin-top:8px">${p.category} • Opened ${timeAgo(p.opened_at)}</div>
+        </div>`;
+    }).join("");
+  } catch(e) {
+    grid.innerHTML = `<div class="empty"><div class="empty-text">Failed to load positions</div></div>`;
+  }
+}
+
+// ── WHALES ────────────────────────────────────────────
+async function loadWhales() {
+  const grid = document.getElementById("whales-grid");
+  grid.innerHTML = `<div class="loading"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>`;
+  try {
+    const whales = await api("/whales");
+    if (!whales.length) {
+      grid.innerHTML = `<div class="empty"><div class="empty-icon">🐋</div><div class="empty-text">Whale refresh runs daily at 6am Riyadh time. Check back soon.</div></div>`;
+      return;
+    }
+    grid.innerHTML = whales.map((w,i)=>{
+      const tierClass = `t${w.tier}`;
+      const tierLabel = w.tier===1?"TIER 1 — ELITE":w.tier===2?"TIER 2 — STRONG":"TIER 3 — TRACKING";
+      const conf = w.confirmed ? `<span class="confirmed-badge">CONFIRMED</span>` : `<span class="pending-badge">DAY ${w.days_in_top50}/3</span>`;
+      return `
+        <div class="card" style="animation-delay:${i*0.03}s">
+          <span class="whale-tier ${tierClass}">${tierLabel}</span>
+          <div style="display:flex;align-items:center;margin-bottom:8px">
+            <span style="font-size:14px;font-weight:600">#${w.rank}</span>
+            ${conf}
+          </div>
+          <div class="whale-addr">${shortAddr(w.address)}</div>
+          <div class="whale-stats">
+            <div class="whale-stat">
+              <div class="whale-stat-val" style="color:${w.win_rate>=0.70?"var(--green)":w.win_rate>=0.60?"var(--blue)":"var(--gray)"}">${((w.win_rate||0)*100).toFixed(0)}%</div>
+              <div class="whale-stat-lbl">Win Rate</div>
+            </div>
+            <div class="whale-stat">
+              <div class="whale-stat-val">$${(w.profit_30d||0).toFixed(0)}</div>
+              <div class="whale-stat-lbl">30d Profit</div>
+            </div>
+            <div class="whale-stat">
+              <div class="whale-stat-val">${w.total_trades||0}</div>
+              <div class="whale-stat-lbl">Total Trades</div>
+            </div>
+          </div>
+          <div class="progress-wrap" style="margin-top:10px">
+            <div class="progress-label"><span>Win Rate</span><span>${((w.win_rate||0)*100).toFixed(1)}%</span></div>
+            <div class="progress-bar"><div class="progress-fill ${w.win_rate>=0.65?"green":"blue"}" style="width:${(w.win_rate||0)*100}%"></div></div>
+          </div>
+        </div>`;
+    }).join("");
+  } catch {
+    grid.innerHTML = `<div class="empty"><div class="empty-text">Failed to load whales</div></div>`;
+  }
+}
+
+// ── MARKET SCANNER ────────────────────────────────────
+async function loadScanner() {
+  const grid = document.getElementById("scanner-grid");
+  grid.innerHTML = `<div class="loading"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>`;
+  try {
+    const markets = await api("/markets");
+    if (!markets?.length) {
+      grid.innerHTML = `<div class="empty"><div class="empty-icon">📡</div><div class="empty-text">No markets available right now.</div></div>`;
+      return;
+    }
+    grid.innerHTML = markets.slice(0,35).map((m,i)=>{
+      const price = parseFloat(m.outcomePrices?.[0]||0.5);
+      const liq   = parseFloat(m.liquidity||0);
+      const vol   = parseFloat(m.volume||0);
+      const endDate = m.endDate||m.end_date_iso;
+      const days  = endDate ? Math.floor((new Date(endDate)-new Date())/86400000) : "?";
+      const edge  = Math.abs(price-0.5)*2;
+      const score = Math.round(edge*50 + Math.min(liq/100000,0.3)*30 + (days<14?0.2:0)*20);
+      return `
+        <div class="market-card" style="animation-delay:${i*0.04}s">
+          <div class="market-category">${m.category||"General"}</div>
+          <div class="market-question">${m.question}</div>
+          <div class="market-price-row">
+            <div>
+              <div class="market-yes">${fmtProb(price)}</div>
+              <div class="market-no">NO ${fmtProb(1-price)}</div>
+            </div>
+            <div class="market-liq">$${liq.toLocaleString()} liq</div>
+            <div class="market-score-ring">${score}</div>
+          </div>
+          <div class="prob-bar-track" style="margin:8px 0">
+            <div class="prob-bar-fill" style="width:${price*100}%;background:${price>0.65?"var(--green)":price<0.35?"var(--red)":"var(--blue)"}"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--gray)">
+            <span>Vol: $${vol.toLocaleString()}</span>
+            <span>${days} days left</span>
+          </div>
+        </div>`;
+    }).join("");
+  } catch {
+    grid.innerHTML = `<div class="empty"><div class="empty-text">Failed to load markets</div></div>`;
+  }
+}
+
+// ── HISTORY ───────────────────────────────────────────
+async function loadHistory() {
+  const list = document.getElementById("history-list");
+  list.innerHTML = `<div class="loading"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>`;
+  try {
+    const trades = await api("/history?limit=50");
+    if (!trades.length) {
+      list.innerHTML = `<div class="empty"><div class="empty-icon">📋</div><div class="empty-text">No closed trades yet.</div></div>`;
+      return;
+    }
+    list.innerHTML = trades.map(t=>`
+      <div class="hist-item">
+        <div class="hist-dot ${t.pnl>=0?"win":"loss"}"></div>
+        <div style="flex:1;min-width:0">
+          <div class="hist-question">${t.market_question?.slice(0,90)}</div>
+          <div class="hist-meta">
+            ${t.agents_fired||""} • ${t.exit_reason||""} • ${timeAgo(t.closed_at)}
+          </div>
+        </div>
+        <div class="hist-pnl ${t.pnl>=0?"pos":"neg"}">
+          ${fmt$(t.pnl||0)}<br>
+          <span style="font-size:10px;font-weight:400">${fmtPct(t.pnl_pct||0)}</span>
+        </div>
+      </div>`).join("");
+  } catch {
+    list.innerHTML = `<div class="empty"><div class="empty-text">Failed to load history</div></div>`;
+  }
+}
+
+// ── STRATEGY ──────────────────────────────────────────
+async function loadStrategy() {
+  const grid = document.getElementById("strategy-grid");
+  grid.innerHTML = `<div class="loading"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>`;
+  try {
+    const strats = await api("/strategy");
+    const maxTrades = Math.max(...strats.map(s=>s.trades), 1);
+    // Summary card
+    const total = strats.reduce((a,s)=>a+s.trades,0);
+    const totalPnl = strats.reduce((a,s)=>a+(s.pnl||0),0);
+    const allWins = strats.reduce((a,s)=>a+s.wins,0);
+    const globalWr = total>0?((allWins/total)*100).toFixed(1):"-";
+    let html = `
+      <div class="card">
+        <div class="card-label">All Strategies</div>
+        <div class="card-value ${totalPnl>=0?"val-green":"val-red"}">${fmt$(totalPnl)}</div>
+        <div class="card-sub">${total} trades • ${globalWr}% win rate</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Strategy Performance</div>
+        <div style="margin-top:8px">`;
+    html += strats.map(s=>{
+      const wr = s.trades>0?((s.wins/s.trades)*100).toFixed(0):"0";
+      const wrColor = parseInt(wr)>=65?"var(--green)":parseInt(wr)>=50?"var(--blue)":"var(--red)";
+      return `<div class="strat-row">
+        <div class="strat-name">${s.name}</div>
+        <div class="strat-bar-wrap"><div class="strat-bar"><div class="strat-fill" style="width:${(s.trades/maxTrades)*100}%;background:${wrColor}"></div></div></div>
+        <div class="strat-stats"><div class="strat-wr" style="color:${wrColor}">${wr}%</div><div class="strat-pnl">${fmt$(s.pnl||0)}</div></div>
+      </div>`;
+    }).join("");
+    html += `</div></div>`;
+    // Individual cards
+    html += strats.map((s,i)=>{
+      const wr = s.trades>0?((s.wins/s.trades)*100).toFixed(1):"N/A";
+      const wrN = parseFloat(wr)||0;
+      const wrColor = wrN>=65?"val-green":wrN>=50?"val-blue":"val-red";
+      return `<div class="card" style="animation-delay:${i*0.05}s">
+        <div class="card-label">${s.name}</div>
+        <div class="card-value ${wrColor}">${wr}<span style="font-size:16px">%</span></div>
+        <div class="card-sub">${s.trades} trades • Avg ${fmt$(s.avg_pnl||0)}/trade</div>
+        <div class="progress-wrap">
+          <div class="progress-label"><span>Win Rate</span><span>${fmt$(s.pnl||0)} total</span></div>
+          <div class="progress-bar"><div class="progress-fill ${wrN>=65?"green":"blue"}" style="width:${wrN}%"></div></div>
+        </div>
+      </div>`;
+    }).join("");
+    grid.innerHTML = html;
+  } catch {
+    grid.innerHTML = `<div class="empty"><div class="empty-text">Failed to load strategy data</div></div>`;
+  }
+}
+
+// ── ALERTS ────────────────────────────────────────────
+async function loadAlerts() {
+  const list = document.getElementById("alerts-list");
+  list.innerHTML = `<div class="loading"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>`;
+  try {
+    const alerts = await api("/alerts");
+    if (!alerts.length) {
+      list.innerHTML = `<div class="empty"><div class="empty-text">No alerts yet.</div></div>`;
+      return;
+    }
+    list.innerHTML = alerts.map(a=>{
+      const typeMap = {TRADE_OPENED:"trade",TRADE_CLOSED:"exit",WHALE_REFRESH:"whale",SCAN:"scan",WARNING:"warn"};
+      const dotClass = typeMap[a.type]||"scan";
+      return `<div class="alert-item">
+        <div class="alert-dot ${dotClass}"></div>
+        <div>
+          <div class="alert-msg">${a.message?.slice(0,150)}</div>
+          <div class="alert-time">${a.type} • ${timeAgo(a.created_at)}</div>
+        </div>
+      </div>`;
+    }).join("");
+  } catch {
+    list.innerHTML = `<div class="empty"><div class="empty-text">Failed to load alerts</div></div>`;
+  }
+}
+
+// ── NEWS FEED ─────────────────────────────────────────
+async function loadNews() {
+  const grid = document.getElementById("news-grid");
+  grid.innerHTML = `<div class="loading"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>`;
+  try {
+    const items = await api("/news?limit=60");
+    if (!items.length) {
+      grid.innerHTML = `<div class="empty"><div class="empty-icon">📰</div><div class="empty-text">News feed populates when the agent starts scanning markets.</div></div>`;
+      return;
+    }
+    grid.innerHTML = items.map((item,i)=>{
+      const isReddit = (item.source||"").toLowerCase().includes("reddit");
+      const sub = isReddit ? item.source.replace("Reddit r/","") : "";
+      const statusBadge = `<span class="news-status ${item.status}">${item.status.toUpperCase()}</span>`;
+      if (isReddit) {
+        return `
+          <div class="card" style="animation-delay:${i*0.03}s">
+            <div class="reddit-header">
+              <div class="reddit-icon">R</div>
+              <div class="reddit-sub">r/${sub}</div>
+              <div class="news-source" style="margin:0;margin-left:auto">${statusBadge}</div>
+              ${item.upvotes?`<div class="reddit-score">${item.upvotes} ↑</div>`:""}
+            </div>
+            <div class="news-headline">${item.headline}</div>
+            ${item.summary?`<div class="reddit-text">${item.summary.slice(0,400)}${item.summary.length>400?"...":""}</div>`:""}
+            ${item.market_question?`<div class="news-market">Related: ${item.market_question.slice(0,70)}</div>`:""}
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px">
+              <div class="news-time">${timeAgo(item.fetched_at)}</div>
+              ${item.url?`<a class="news-link" href="${item.url}" target="_blank">View Post →</a>`:""}
+            </div>
+          </div>`;
+      }
+      return `
+        <div class="card" style="animation-delay:${i*0.03}s">
+          ${item.image_url?`<img class="news-image" src="${item.image_url}" alt="" loading="lazy" onerror="this.style.display='none'">`:""}
+          <div class="news-source">${item.source} ${statusBadge}</div>
+          <div class="news-headline">${item.headline}</div>
+          ${item.summary?`<div class="news-summary">${item.summary.slice(0,300)}${item.summary.length>300?"...":""}</div>`:""}
+          ${item.market_question?`<div class="news-market">Related market: ${item.market_question.slice(0,70)}</div>`:""}
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
+            <div class="news-time">${timeAgo(item.fetched_at)}</div>
+            ${item.url?`<a class="news-link" href="${item.url}" target="_blank">Read Article →</a>`:""}
+          </div>
+        </div>`;
+    }).join("");
+  } catch {
+    grid.innerHTML = `<div class="empty"><div class="empty-text">Failed to load news</div></div>`;
+  }
+}
+
+// Auto-refresh overview every 60 seconds
+setInterval(()=>{ if(document.querySelector(".nav-btn.active")?.dataset?.page==="overview") loadOverview(); }, 60000);
+</script>
+</body>
+</html>
