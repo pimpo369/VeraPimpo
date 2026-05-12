@@ -495,11 +495,14 @@ async function fetchNewsForMarket(market) {
     await delay(80);
   }
  
-  // Save to DB
+  // Save ALL articles to DB — even ones that didn't trigger a trade
   for (const h of hits) {
     try {
-      db.prepare("INSERT OR IGNORE INTO news_items (source,headline,summary,url,image_url,published_at,market_id,market_question) VALUES (?,?,?,?,?,?,?,?)")
-        .run(h.source,h.headline,h.summary,h.url,h.image_url,h.pubDate,market.id,market.question);
+      db.prepare(`INSERT OR IGNORE INTO news_items
+        (source,headline,summary,url,image_url,published_at,market_id,market_question,status)
+        VALUES (?,?,?,?,?,?,?,?,?)`)
+        .run(h.source, h.headline, h.summary, h.url, h.image_url,
+             h.pubDate, market.id, market.question, "monitored");
     } catch {}
   }
  
@@ -882,6 +885,12 @@ async function runScan() {
       db.prepare("INSERT INTO scan_log (market_id,market_question,agents_fired,consensus,action) VALUES (?,?,?,?,?)")
         .run(market.id, market.question, allAgents.filter(a=>a.vote).map(a=>a.name).join(","), consensus.votes, consensus.action);
  
+      // Update news items status if this market triggers a trade
+      if (consensus.action==="ENTER") {
+        db.prepare("UPDATE news_items SET status='triggered' WHERE market_id=? AND status='monitored'")
+          .run(market.id);
+      }
+ 
       if (consensus.action==="ENTER") {
         const guard = checkGuardrails(market, consensus);
         if (guard.ok) {
@@ -1079,6 +1088,11 @@ if (bot) {
     ctx.replyWithHTML(msg);
   });
  
+  bot.command("scan", async ctx=>{
+    ctx.replyWithHTML("<i>Manual scan triggered — running all 6 agents across viable markets...</i>");
+    runScan();
+  });
+ 
   bot.command("whalesscan", async ctx=>{
     ctx.replyWithHTML("<i>Manual whale scan triggered — this takes 1-2 minutes...</i>");
     refreshWhales().then(()=>ctx.replyWithHTML("Whale scan complete. Send /whales to see updated rankings."));
@@ -1108,7 +1122,7 @@ if (bot) {
     `5. Redeploy\n\n` +
     `See PDF guide for complete instructions.`
   ));
-  bot.help(ctx=>ctx.replyWithHTML(`/portfolio /positions /history /whales /whalesscan /markets /news /strategy /pause /resume /status /live`));
+  bot.help(ctx=>ctx.replyWithHTML(`/portfolio /scan /positions /history /whales /whalesscan /markets /news /strategy /pause /resume /status /live`));
 }
  
 // ══════════════════════════════════════════════════════════
@@ -1196,6 +1210,11 @@ app.get("/api/alerts", (req,res)=>{
 app.get("/api/scan-log", (req,res)=>{
   const rows=db.prepare("SELECT * FROM scan_log ORDER BY scanned_at DESC LIMIT 100").all();
   res.json(rows);
+});
+ 
+app.post("/api/scan", async (req,res)=>{
+  res.json({started:true, message:"Scan started"});
+  runScan();
 });
  
 app.post("/api/whalesscan", async (req,res)=>{
