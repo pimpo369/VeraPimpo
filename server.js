@@ -852,9 +852,24 @@ async function monitorPositions() {
     try {
       const market = await getMarketById(trade.market_id);
       if (!market) continue;
-      const price     = parseFloat(market.outcomePrices?.[0] || trade.current_price);
-      const endDate   = new Date(market.endDate||market.end_date_iso);
-      const hoursLeft = (endDate-new Date())/3600000;
+
+      // Robust price extraction — outcomePrices can be a JSON string
+      let price = 0;
+      try {
+        const op = market.outcomePrices;
+        if (typeof op === "string") price = parseFloat(JSON.parse(op)[0]);
+        else if (Array.isArray(op)) price = parseFloat(op[0]);
+        else price = parseFloat(market.bestBid || market.lastTradePrice || 0);
+      } catch { price = parseFloat(market.bestBid || market.yes_price || 0); }
+
+      // CRITICAL: never use price=0 for exit decisions — skip this position
+      if (!price || price <= 0 || isNaN(price)) {
+        console.log(`Monitor skip ${trade.market_id?.slice(0,20)}: price=${price} (using stored: ${trade.current_price})`);
+        continue;
+      }
+
+      const endDate   = new Date(market.endDate||market.end_date_iso||market._endDate);
+      const hoursLeft = !isNaN(endDate) ? (endDate-new Date())/3600000 : 999;
       const pnl       = (price - trade.entry_price) * trade.shares;
       const pnl_pct   = ((price - trade.entry_price)/trade.entry_price)*100;
       const vol24     = parseFloat(market.volume24hr||0);
