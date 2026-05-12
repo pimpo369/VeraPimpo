@@ -511,7 +511,13 @@
   </div>
   <div class="login-card">
     <div class="login-title">Enter your access password to continue</div>
-    <input class="login-input" type="password" id="pass-input" placeholder="Password" autocomplete="current-password"/>
+    <div style="position:relative">
+      <input class="login-input" type="password" id="pass-input" placeholder="Password" autocomplete="current-password" style="padding-right:48px;margin-bottom:0"/>
+      <button onclick="togglePass()" id="eye-btn" style="position:absolute;right:14px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--gray);font-size:16px;padding:4px;line-height:1" title="Show/hide password">
+        <svg id="eye-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+    </div>
+    <div style="margin-bottom:14px"></div>
     <button class="login-btn" id="login-btn">Access Dashboard</button>
     <div class="login-error" id="login-error"></div>
     <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer;font-size:13px;color:var(--gray)">
@@ -586,7 +592,15 @@
         <div class="section-title">Whale Tracker</div>
         <div class="section-sub">Top 50 ranked wallets — refreshed daily</div>
       </div>
-      <button class="refresh-btn" onclick="loadWhales()">Refresh</button>
+      <div style="display:flex;gap:8px">
+        <button class="refresh-btn" onclick="loadWhales()">Refresh</button>
+        <button class="refresh-btn" id="whale-scan-btn" onclick="triggerWhaleScan()" style="border-color:var(--blue);color:var(--blue)">
+          Scan Wallets Now
+        </button>
+      </div>
+    </div>
+    <div id="whale-scan-status" style="display:none;margin-bottom:16px;padding:12px 16px;background:rgba(88,166,255,0.08);border:1px solid rgba(88,166,255,0.2);border-radius:var(--radius-sm);font-size:13px;color:var(--blue)">
+      Scanning whale wallets... this takes 1-2 minutes. Page will refresh automatically.
     </div>
     <div class="masonry" id="whales-grid"></div>
   </div>
@@ -655,6 +669,19 @@
 <script>
 const API = window.location.origin;
 let password = "";
+ 
+// ── TOGGLE PASSWORD VISIBILITY ────────────────────────
+function togglePass() {
+  const input = document.getElementById("pass-input");
+  const icon  = document.getElementById("eye-icon");
+  if (input.type === "password") {
+    input.type = "text";
+    icon.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>';
+  } else {
+    input.type = "password";
+    icon.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+  }
+}
  
 // ── AUTH ───────────────────────────────────────────────
 async function attemptLogin(pass, remember) {
@@ -888,6 +915,40 @@ async function loadPositions() {
     }).join("");
   } catch(e) {
     grid.innerHTML = `<div class="empty"><div class="empty-text">Failed to load positions</div></div>`;
+  }
+}
+ 
+// ── WHALE SCAN ────────────────────────────────────────
+async function triggerWhaleScan() {
+  const btn    = document.getElementById("whale-scan-btn");
+  const status = document.getElementById("whale-scan-status");
+  btn.textContent  = "Scanning...";
+  btn.style.opacity = "0.5";
+  btn.disabled = true;
+  status.style.display = "block";
+  try {
+    await fetch(`${API}/api/whalesscan`, {
+      method: "POST",
+      headers: {"x-dashboard-password": password}
+    });
+    // Poll for completion — refresh whales every 20 seconds for 2 minutes
+    let attempts = 0;
+    const poll = setInterval(async () => {
+      attempts++;
+      await loadWhales();
+      if (attempts >= 6) {
+        clearInterval(poll);
+        btn.textContent  = "Scan Wallets Now";
+        btn.style.opacity = "1";
+        btn.disabled = false;
+        status.style.display = "none";
+      }
+    }, 20000);
+  } catch {
+    btn.textContent  = "Scan Wallets Now";
+    btn.style.opacity = "1";
+    btn.disabled = false;
+    status.style.display = "none";
   }
 }
  
