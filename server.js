@@ -22,13 +22,13 @@
 //   $10k min liquidity | 3% max market share | 5% min edge
 //   10 trades/day | 40% max single whale | 30% max category
 // ============================================================
- 
+
 const { Telegraf }   = require("telegraf");
 const Database       = require("better-sqlite3");
 const cron           = require("node-cron");
 const express        = require("express");
 const cors           = require("cors");
- 
+
 // ── CONFIG ────────────────────────────────────────────────
 const cfg = {
   telegram: process.env.VERAPIMPO_TELEGRAM_TOKEN,
@@ -36,9 +36,9 @@ const cfg = {
   chatId2:  process.env.VERAPIMPO_CHAT_ID_2 || null,
   dashPass: process.env.DASHBOARD_PASSWORD || "verapimpo2026",
 };
- 
+
 const PAPER = true; // flip to false to go live
- 
+
 // ── DATABASE ──────────────────────────────────────────────
 const db = new Database("./verapimpo.db");
 db.exec(`
@@ -101,16 +101,26 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
- 
+
 const getState = (k,d=null) => { const r=db.prepare("SELECT value FROM agent_state WHERE key=?").get(k); return r?JSON.parse(r.value):d; };
 const setState = (k,v) => db.prepare("INSERT OR REPLACE INTO agent_state (key,value) VALUES (?,?)").run(k,JSON.stringify(v));
- 
+
 if (!getState("total_loss"))  setState("total_loss",  0);
 if (!getState("total_pnl"))   setState("total_pnl",   0);
 if (!getState("paused"))      setState("paused",       false);
 if (!getState("daily_trades"))setState("daily_trades", 0);
 if (!getState("trade_date"))  setState("trade_date",   "");
- 
+
+// Clean up duplicate news items on every boot — keep only the first occurrence
+try {
+  db.exec(`
+    DELETE FROM news_items WHERE id NOT IN (
+      SELECT MIN(id) FROM news_items GROUP BY source, headline
+    )
+  `);
+  console.log("Deduped news_items table");
+} catch(e) { console.log("Dedup:", e.message); }
+
 // ── GUARDRAILS ────────────────────────────────────────────
 const BUDGET          = 500;
 const MAX_POSITION    = 50;
@@ -127,7 +137,7 @@ const MAX_WHALE_DEP   = 0.40;
 const MAX_CATEGORY_DEP= 0.30;
 const EXIT_TARGET     = 0.85;
 const VOL_SPIKE_EXIT  = 3.0;
- 
+
 // ── HELPERS ───────────────────────────────────────────────
 async function safeFetch(url, opts={}, timeout=10000) {
   const ctrl = new AbortController();
@@ -153,7 +163,7 @@ async function safeFetchText(url, timeout=8000) {
   finally { clearTimeout(t); }
 }
 const delay = ms => new Promise(r=>setTimeout(r,ms));
- 
+
 function isAuthorized(id) {
   return [cfg.chatId, cfg.chatId2].filter(Boolean).map(String).includes(String(id));
 }
@@ -172,7 +182,7 @@ const getOpenTrades  = () => db.prepare("SELECT * FROM paper_trades WHERE status
 const getDeployed    = () => db.prepare("SELECT SUM(size) as t FROM paper_trades WHERE status='open'").get()?.t||0;
 const getCatDeployed = (cat) => db.prepare("SELECT SUM(size) as t FROM paper_trades WHERE status='open' AND category=?").get(cat)?.t||0;
 const getWhaleDep    = (addr) => db.prepare("SELECT COUNT(*) as c FROM paper_trades WHERE status='open' AND agents_fired LIKE ?").get(`%${addr}%`)?.c||0;
- 
+
 function resetDailyCounters() {
   const today = new Date().toDateString();
   if (getState("trade_date") !== today) {
@@ -180,13 +190,13 @@ function resetDailyCounters() {
     setState("daily_trades", 0);
   }
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // POLYMARKET API
 // ══════════════════════════════════════════════════════════
 const POLY_API = "https://clob.polymarket.com";
 const GAMMA_API = "https://gamma-api.polymarket.com";
- 
+
 async function getMarkets(limit=100, offset=0) {
   // Try Gamma API with proper headers
   const headers = {
@@ -199,7 +209,7 @@ async function getMarkets(limit=100, offset=0) {
   const url = `${GAMMA_API}/markets?limit=${limit}&offset=${offset}&active=true&closed=false&order=volume&ascending=false`;
   const data = await safeFetch(url, {headers}, 12000);
   if (Array.isArray(data) && data.length > 0) return data;
- 
+
   // Fallback: try events endpoint
   const url2 = `${GAMMA_API}/events?limit=${limit}&offset=${offset}&active=true&closed=false&order=volume&ascending=false`;
   const data2 = await safeFetch(url2, {headers}, 12000);
@@ -215,66 +225,66 @@ async function getMarkets(limit=100, offset=0) {
   console.log("Polymarket API returned no data — retrying in next scan cycle");
   return [];
 }
- 
+
 async function getMarketById(id) {
   const headers = {"Origin":"https://polymarket.com","Referer":"https://polymarket.com/"};
   return await safeFetch(`${GAMMA_API}/markets/${id}`, {headers});
 }
- 
+
 async function getMarketOrderBook(tokenId) {
   return await safeFetch(`${POLY_API}/book?token_id=${tokenId}`);
 }
- 
+
 async function getRecentTrades(marketId, limit=20) {
   return await safeFetch(`${POLY_API}/trades?market=${marketId}&limit=${limit}`);
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // LAYER 1: PRE-SIGNAL DETECTION
 // Before whales trade — detect funding and order book pressure
 // ══════════════════════════════════════════════════════════
- 
+
 async function detectOrderBookPressure(market) {
   try {
     if (!market.clobTokenIds?.length) return { pressure: 0, signal: false };
     const tokenId = market.clobTokenIds[0];
     const book    = await getMarketOrderBook(tokenId);
     if (!book?.bids?.length || !book?.asks?.length) return { pressure: 0, signal: false };
- 
+
     const topBids = book.bids.slice(0,5);
     const topAsks = book.asks.slice(0,5);
     const bidVolume = topBids.reduce((s,b)=>s+parseFloat(b.size||0),0);
     const askVolume = topAsks.reduce((s,a)=>s+parseFloat(a.size||0),0);
     const spread    = parseFloat(topAsks[0]?.price||0) - parseFloat(topBids[0]?.price||0);
- 
+
     // High bid pressure and tight spread = someone loading up
     const pressure = bidVolume / (askVolume||1);
     const signal   = pressure > 1.8 && spread < 0.03;
     return { pressure: parseFloat(pressure.toFixed(2)), spread: parseFloat(spread.toFixed(4)), signal };
   } catch { return { pressure:0, signal:false }; }
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // LAYER 2: REAL-TIME WHALE DETECTION
 // ══════════════════════════════════════════════════════════
- 
+
 async function getWhaleActivity(market) {
   try {
     const trades = await getRecentTrades(market.id, 50);
     if (!Array.isArray(trades)) return { whales:[], clustering:0 };
- 
+
     const confirmedWhales = db.prepare("SELECT * FROM whales WHERE confirmed=1 ORDER BY rank").all();
     const whaleAddrs = new Set(confirmedWhales.map(w=>w.address.toLowerCase()));
- 
+
     const whaleHits = [];
     const recentWindow = Date.now() - 600000; // last 10 min
- 
+
     for (const trade of trades) {
       const maker = trade.maker?.toLowerCase() || "";
       const taker = trade.taker?.toLowerCase() || "";
       const ts    = new Date(trade.timestamp||trade.created_at).getTime();
       if (ts < recentWindow) continue;
- 
+
       for (const addr of [maker, taker]) {
         if (whaleAddrs.has(addr)) {
           const whale = confirmedWhales.find(w=>w.address.toLowerCase()===addr);
@@ -285,19 +295,19 @@ async function getWhaleActivity(market) {
         }
       }
     }
- 
+
     // Clustering — multiple unique whales in same market
     const uniqueWhales = [...new Set(whaleHits.map(h=>h.whale.address))];
     const clustering   = uniqueWhales.length;
- 
+
     return { whales: whaleHits, clustering, uniqueWhales };
   } catch { return { whales:[], clustering:0, uniqueWhales:[] }; }
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // LAYER 2: RELATED MARKET DIVERGENCE
 // ══════════════════════════════════════════════════════════
- 
+
 function detectMarketDivergence(market, allMarkets) {
   try {
     const q       = market.question?.toLowerCase() || "";
@@ -309,28 +319,28 @@ function detectMarketDivergence(market, allMarkets) {
       const words = q.split(" ").filter(w=>w.length>4);
       return words.some(w=>mq.includes(w));
     });
- 
+
     let divergence = 0;
     for (const r of related.slice(0,3)) {
       const rp  = parseFloat(r.outcomePrices?.[0] || r.bestBid || 0.5);
       const gap = Math.abs(price - rp);
       if (gap > 0.12) divergence += gap;
     }
- 
+
     return { divergence: parseFloat(divergence.toFixed(3)), related: related.length, signal: divergence > 0.15 };
   } catch { return { divergence:0, related:0, signal:false }; }
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // LAYER 2: RESOLUTION SOURCE MONITORING
 // ══════════════════════════════════════════════════════════
- 
+
 async function checkResolutionSource(market) {
   try {
     const q       = market.question?.toLowerCase() || "";
     const price   = parseFloat(market.outcomePrices?.[0] || 0.5);
     const results = [];
- 
+
     // Fed rate decisions
     if (q.includes("fed") || q.includes("federal reserve") || q.includes("rate")) {
       const text = await safeFetchText("https://www.federalreserve.gov/newsevents/pressreleases.htm");
@@ -339,14 +349,14 @@ async function checkResolutionSource(market) {
         if (hasDecision) results.push({ source:"FederalReserve", signal:true, detail:hasDecision[0] });
       }
     }
- 
+
     // Sports outcomes
     if (q.includes("nba") || q.includes("nfl") || q.includes("super bowl") || q.includes("championship")) {
       const espn = await safeFetchText("https://www.espn.com/espn/rss/news");
       const mentions = (espn.match(/<title>([^<]+)<\/title>/g)||[]).slice(0,5);
       results.push({ source:"ESPN", signal:mentions.length>0, detail:`${mentions.length} recent headlines` });
     }
- 
+
     // Crypto price markets
     if (q.includes("bitcoin") || q.includes("btc") || q.includes("ethereum") || q.includes("eth")) {
       const cg = await safeFetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd");
@@ -360,29 +370,29 @@ async function checkResolutionSource(market) {
         }
       }
     }
- 
+
     const anySignal = results.some(r=>r.signal);
     return { results, signal: anySignal, edge: anySignal ? 0.15 : 0 };
   } catch { return { results:[], signal:false, edge:0 }; }
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // AGENT 1: WHALE COPY (tier-weighted)
 // ══════════════════════════════════════════════════════════
- 
+
 function agentWhaleCopy(whaleActivity) {
   const { whales, clustering } = whaleActivity;
   if (!whales?.length) return { vote:false, confidence:0, detail:"No whale activity" };
- 
+
   // Find highest tier whale
   const sorted = [...whales].sort((a,b)=>a.whale.tier-b.whale.tier);
   const best   = sorted[0];
   if (!best) return { vote:false, confidence:0, detail:"No confirmed whales" };
- 
+
   const tier   = best.whale.tier;
   const conf   = tier===1?0.9:tier===2?0.7:0.5;
   const bonus  = clustering >= 3 ? 0.15 : clustering >= 2 ? 0.08 : 0;
- 
+
   return {
     vote:       true,
     confidence: Math.min(1, conf+bonus),
@@ -392,25 +402,25 @@ function agentWhaleCopy(whaleActivity) {
     detail:     `Tier ${tier} whale | Win rate: ${(best.whale.win_rate*100).toFixed(0)}% | Clustering: ${clustering} wallets`
   };
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // AGENT 2: STEALTH SIGNAL DETECTOR
 // Whale moved, no public info yet
 // ══════════════════════════════════════════════════════════
- 
+
 function agentStealth(whaleActivity, newsSignal, sentimentSignal) {
   const { whales } = whaleActivity;
   if (!whales?.length) return { vote:false, confidence:0, detail:"No whale activity" };
- 
+
   const hasNews      = newsSignal?.vote;
   const hasSentiment = sentimentSignal?.vote;
   const isStealthy   = !hasNews && !hasSentiment;
- 
+
   if (!isStealthy) return { vote:false, confidence:0, detail:"Signal already public" };
- 
+
   const bestWhale = whales.sort((a,b)=>a.whale.tier-b.whale.tier)[0];
   const conf      = bestWhale?.whale.tier===1 ? 0.85 : bestWhale?.whale.tier===2 ? 0.65 : 0.45;
- 
+
   return {
     vote:       conf > 0.5,
     confidence: conf,
@@ -418,11 +428,11 @@ function agentStealth(whaleActivity, newsSignal, sentimentSignal) {
     detail:     `STEALTH — Tier ${bestWhale?.whale.tier} whale entered, zero public confirmation yet`
   };
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // AGENT 3: NEWS CATALYST (19 sources)
 // ══════════════════════════════════════════════════════════
- 
+
 const NEWS_SOURCES = [
   { name:"AP News",      url:"https://rsshub.app/apnews/topics/apf-politics" },
   { name:"Google News",  url:"https://news.google.com/rss/search?q=prediction+market" },
@@ -441,12 +451,12 @@ const REDDIT_SOURCES = [
   "polymarket", "PredictionMarkets", "politics",
   "Economics", "CryptoCurrency", "sports", "worldnews"
 ];
- 
+
 async function fetchNewsForMarket(market) {
   const q      = market.question?.toLowerCase() || "";
   const words  = q.split(" ").filter(w=>w.length>4 && !["will","have","does","than","from","that","this","with","what","when","where","which"].includes(w));
   const hits   = [];
- 
+
   for (const src of NEWS_SOURCES) {
     try {
       if (!src.url) continue;
@@ -468,7 +478,7 @@ async function fetchNewsForMarket(market) {
     } catch {}
     await delay(100);
   }
- 
+
   // Reddit sources
   for (const sub of REDDIT_SOURCES) {
     try {
@@ -494,30 +504,36 @@ async function fetchNewsForMarket(market) {
     } catch {}
     await delay(80);
   }
- 
-  // Save ALL articles to DB — even ones that didn't trigger a trade
+
+  // Save ALL articles to DB — deduplicate by headline+source combination
   for (const h of hits) {
     try {
-      db.prepare(`INSERT OR IGNORE INTO news_items
-        (source,headline,summary,url,image_url,published_at,market_id,market_question,status)
-        VALUES (?,?,?,?,?,?,?,?,?)`)
-        .run(h.source, h.headline, h.summary, h.url, h.image_url,
-             h.pubDate, market.id, market.question, "monitored");
+      // Check if this headline from this source already exists
+      const exists = db.prepare(
+        "SELECT id FROM news_items WHERE source=? AND headline=?"
+      ).get(h.source, h.headline);
+      if (!exists) {
+        db.prepare(`INSERT INTO news_items
+          (source,headline,summary,url,image_url,published_at,market_id,market_question,status)
+          VALUES (?,?,?,?,?,?,?,?,?)`)
+          .run(h.source, h.headline, h.summary, h.url, h.image_url,
+               h.pubDate, market.id, market.question, "monitored");
+      }
     } catch {}
   }
- 
+
   return hits;
 }
- 
+
 async function agentNewscat(market) {
   const hits = await fetchNewsForMarket(market);
   if (!hits.length) return { vote:false, confidence:0, detail:"No relevant news" };
- 
+
   const recent    = hits.filter(h => new Date(h.pubDate) > new Date(Date.now()-3600000*6));
   const veryRecent= hits.filter(h => new Date(h.pubDate) > new Date(Date.now()-3600000));
   const score     = recent.length * 0.15 + veryRecent.length * 0.25;
   const conf      = Math.min(0.9, score);
- 
+
   return {
     vote:       conf > 0.2,
     confidence: conf,
@@ -526,17 +542,17 @@ async function agentNewscat(market) {
     detail:     `${hits.length} articles | ${veryRecent.length} in last hour | ${hits.map(h=>h.source).slice(0,3).join(", ")}`
   };
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // AGENT 4: SENTIMENT (Reddit tone + velocity)
 // ══════════════════════════════════════════════════════════
- 
+
 async function agentSentiment(market) {
   try {
     const q     = market.question?.toLowerCase()||"";
     const words = q.split(" ").filter(w=>w.length>4);
     let bulls=0, bears=0, total=0, velocity=0;
- 
+
     for (const sub of ["polymarket","PredictionMarkets","politics","worldnews"]) {
       try {
         const json = await safeFetch(`https://www.reddit.com/r/${sub}/search.json?q=${encodeURIComponent(words.slice(0,3).join(" "))}&sort=new&limit=20`,{headers:{"User-Agent":"verapimpo/1.0"}});
@@ -554,18 +570,18 @@ async function agentSentiment(market) {
         await delay(150);
       } catch {}
     }
- 
+
     const bullRatio = total > 0 ? bulls/(bulls+bears+1) : 0.5;
     const conf      = Math.min(0.85, bullRatio * 0.7 + (velocity/5)*0.3);
- 
+
     return { vote: bullRatio > 0.55, confidence: conf, bullRatio: parseFloat(bullRatio.toFixed(2)), velocity, detail:`Bull ratio: ${(bullRatio*100).toFixed(0)}% | Velocity: ${velocity} posts/2h` };
   } catch { return { vote:false, confidence:0, detail:"Sentiment unavailable" }; }
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // AGENT 5: TECHNICAL (price action, volume, momentum)
 // ══════════════════════════════════════════════════════════
- 
+
 async function agentTechnical(market) {
   try {
     const price    = parseFloat(market.outcomePrices?.[0] || market.bestBid || 0);
@@ -573,7 +589,7 @@ async function agentTechnical(market) {
     const volume24 = parseFloat(market.volume24hr||0);
     const liquidity= parseFloat(market.liquidity||0);
     if (!price) return { vote:false, confidence:0, detail:"No price data" };
- 
+
     // Volume momentum — is volume accelerating?
     const volMomentum = volume24 > 0 && volume > 0 ? volume24/(volume/30) : 0;
     // Price in sweet zone (not extreme)
@@ -582,10 +598,10 @@ async function agentTechnical(market) {
     const hasUpside = price < 0.70;
     // Good liquidity
     const goodLiq   = liquidity >= MIN_LIQUIDITY;
- 
+
     const signals   = [volMomentum>1.5, inZone, hasUpside, goodLiq];
     const score     = signals.filter(Boolean).length / signals.length;
- 
+
     return {
       vote:       score >= 0.6,
       confidence: score,
@@ -596,12 +612,12 @@ async function agentTechnical(market) {
     };
   } catch { return { vote:false, confidence:0, detail:"Technical unavailable" }; }
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // AGENT 6: RESOLUTION MATH
 // Probability curve vs historical patterns + days to resolve
 // ══════════════════════════════════════════════════════════
- 
+
 async function agentResolutionMath(market) {
   try {
     const price      = parseFloat(market.outcomePrices?.[0] || market.bestBid || 0);
@@ -609,10 +625,10 @@ async function agentResolutionMath(market) {
     const now        = new Date();
     const daysLeft   = (endDate - now) / 86400000;
     const volume     = parseFloat(market.volume||0);
- 
+
     if (isNaN(daysLeft) || daysLeft < 0) return { vote:false, confidence:0, detail:"Already resolved" };
     if (daysLeft < (BLACKOUT_HOURS/24)) return { vote:false, confidence:0, detail:"In blackout window" };
- 
+
     // Resolution math logic:
     // Markets near 50% with 3-14 days left have highest expected value
     // Markets being heavily traded (high volume) are efficiently priced
@@ -621,13 +637,13 @@ async function agentResolutionMath(market) {
     const optimalWindow = daysLeft >= 1 && daysLeft <= 30;
     const lowEfficiency = volume < 50000;
     const notTooClose   = daysLeft > BLACKOUT_HOURS/24;
- 
+
     // Edge calculation: potential return if price moves to 75% from 40% = +87.5%
     const potentialReturn = price < 0.5 ? (0.75-price)/price : 0;
     const edgeSignal      = potentialReturn > MIN_EDGE;
- 
+
     const score = [nearMidpoint, optimalWindow, lowEfficiency, notTooClose, edgeSignal].filter(Boolean).length / 5;
- 
+
     return {
       vote:           score >= 0.6,
       confidence:     score,
@@ -637,16 +653,16 @@ async function agentResolutionMath(market) {
     };
   } catch { return { vote:false, confidence:0, detail:"Math unavailable" }; }
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // CONSENSUS ENGINE
 // ══════════════════════════════════════════════════════════
- 
+
 function runConsensus(agents, whaleResult, stealthResult) {
   const votes = agents.filter(a=>a.vote).length;
   const total  = agents.length;
   const tier   = whaleResult?.tier || 99;
- 
+
   // Tier 1 whale alone → half size immediately
   if (tier === 1 && whaleResult?.vote) {
     return { action:"ENTER", size_mult:0.50, label:"TIER1_WHALE_ALONE", votes, total };
@@ -664,11 +680,11 @@ function runConsensus(agents, whaleResult, stealthResult) {
   // Less than 3 → skip
   return { action:"SKIP", size_mult:0, label:"INSUFFICIENT", votes, total };
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // GUARDRAIL CHECKS
 // ══════════════════════════════════════════════════════════
- 
+
 function checkGuardrails(market, consensus) {
   resetDailyCounters();
   const open    = getOpenTrades();
@@ -677,7 +693,7 @@ function checkGuardrails(market, consensus) {
   const liq     = parseFloat(market.liquidity||0);
   const endDate = new Date(market.endDate||market.end_date_iso);
   const hoursLeft=(endDate-new Date())/3600000;
- 
+
   if (getState("paused"))                  return { ok:false, reason:"Agent paused" };
   if ((getState("total_loss")||0)>=LOSS_HALT) return { ok:false, reason:`Loss halt $${LOSS_HALT} reached` };
   if (open.length >= MAX_POSITIONS)        return { ok:false, reason:`Max positions (${MAX_POSITIONS})` };
@@ -687,26 +703,26 @@ function checkGuardrails(market, consensus) {
   if (price < PROB_FLOOR)                  return { ok:false, reason:`Below ${PROB_FLOOR*100}% floor` };
   if (liq < MIN_LIQUIDITY)                 return { ok:false, reason:`Liquidity $${liq} < $${MIN_LIQUIDITY}` };
   if (hoursLeft < BLACKOUT_HOURS)          return { ok:false, reason:`Blackout window (${hoursLeft.toFixed(1)}h left)` };
- 
+
   const cat   = market.category||"other";
   const catDep= getCatDeployed(cat);
   if (catDep >= BUDGET*MAX_CATEGORY_DEP)   return { ok:false, reason:`Category cap (${cat} at $${catDep.toFixed(0)})` };
- 
+
   const avail  = BUDGET - deployed;
   const size   = Math.min(MAX_POSITION, avail * consensus.size_mult);
   if (size < 5)                            return { ok:false, reason:"Insufficient budget" };
- 
+
   // Max market share
   const marketShare = size/liq;
   if (marketShare > MAX_MKT_SHARE)         return { ok:false, reason:`Market share ${(marketShare*100).toFixed(1)}% > ${MAX_MKT_SHARE*100}%` };
- 
+
   return { ok:true, size: parseFloat(size.toFixed(2)) };
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // TRADE EXECUTION (Paper)
 // ══════════════════════════════════════════════════════════
- 
+
 async function executePaperTrade(market, consensus, agents, guardrails) {
   const price     = parseFloat(market.outcomePrices?.[0] || 0.5);
   const size      = guardrails.size;
@@ -715,7 +731,7 @@ async function executePaperTrade(market, consensus, agents, guardrails) {
   const target    = Math.min(PROB_CEILING, price + (1-price)*EXIT_TARGET);
   const endDate   = market.endDate||market.end_date_iso;
   const agentsFired= agents.filter(a=>a.vote).map(a=>a.name).join(",");
- 
+
   db.prepare(`INSERT INTO paper_trades
     (market_id,market_question,category,side,entry_price,current_price,
      size,shares,stop_price,target_price,agents_fired,layer,tier,closes_at)
@@ -723,9 +739,9 @@ async function executePaperTrade(market, consensus, agents, guardrails) {
     .run(market.id, market.question, market.category||"general",
          "YES", price, price, size, shares, stopPrice, target,
          agentsFired, consensus.label, consensus.votes, endDate);
- 
+
   setState("daily_trades", (getState("daily_trades")||0)+1);
- 
+
   const msg =
     `<b>VERAPIMPO TRADE</b> [PAPER]\n\n` +
     `<b>${market.question?.slice(0,80)}</b>\n\n` +
@@ -736,16 +752,16 @@ async function executePaperTrade(market, consensus, agents, guardrails) {
     `Agents: ${agentsFired}\n` +
     `Category: ${market.category||"general"}\n` +
     `Resolves: ${new Date(endDate).toLocaleDateString()}`;
- 
+
   await tg(msg);
   logAlert("TRADE_OPENED", msg, market.id);
   console.log(`📈 PAPER TRADE: ${market.question?.slice(0,60)} @ ${(price*100).toFixed(1)}% $${size}`);
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // POSITION MONITORING & EXIT
 // ══════════════════════════════════════════════════════════
- 
+
 async function monitorPositions() {
   const open = getOpenTrades();
   for (const trade of open) {
@@ -758,23 +774,23 @@ async function monitorPositions() {
       const pnl       = (price - trade.entry_price) * trade.shares;
       const pnl_pct   = ((price - trade.entry_price)/trade.entry_price)*100;
       const vol24     = parseFloat(market.volume24hr||0);
- 
+
       // Update current price
       db.prepare("UPDATE paper_trades SET current_price=? WHERE id=?").run(price, trade.id);
- 
+
       let exitReason = null;
       if (price >= trade.target_price)          exitReason = "TARGET_HIT";
       else if (price <= trade.stop_price)        exitReason = "STOP_HIT";
       else if (hoursLeft <= BLACKOUT_HOURS)      exitReason = "RESOLUTION_BLACKOUT";
       else if (vol24 > (parseFloat(market.volume||0)/30)*VOL_SPIKE_EXIT) exitReason = "VOLUME_SPIKE";
- 
+
       if (exitReason) {
         db.prepare("UPDATE paper_trades SET status='closed',pnl=?,pnl_pct=?,exit_reason=?,closed_at=CURRENT_TIMESTAMP WHERE id=?")
           .run(parseFloat(pnl.toFixed(4)), parseFloat(pnl_pct.toFixed(2)), exitReason, trade.id);
         const totalPnl = (getState("total_pnl")||0) + pnl;
         setState("total_pnl", parseFloat(totalPnl.toFixed(4)));
         if (pnl < 0) setState("total_loss", (getState("total_loss")||0)+Math.abs(pnl));
- 
+
         const msg =
           `<b>VERAPIMPO EXIT</b> [PAPER]\n\n` +
           `<b>${trade.market_question?.slice(0,80)}</b>\n\n` +
@@ -789,18 +805,18 @@ async function monitorPositions() {
     await delay(300);
   }
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // MAIN SCAN
 // ══════════════════════════════════════════════════════════
- 
+
 async function runScan() {
   if (getState("paused")) return;
   console.log(`🔍 VeraPimpo scan ${new Date().toISOString()}`);
- 
+
   let page=0, traded=0, scanned=0;
   const allMarkets=[];
- 
+
   // Pull up to 300 markets
   for (let i=0;i<3;i++) {
     const batch = await getMarkets(100, i*100);
@@ -808,9 +824,9 @@ async function runScan() {
     allMarkets.push(...batch);
     await delay(300);
   }
- 
+
   console.log(`📊 ${allMarkets.length} markets found`);
- 
+
   // Normalize and filter markets
   const normalize = m => {
     let yesPrice = 0;
@@ -824,7 +840,7 @@ async function runScan() {
       _liq: parseFloat(m.liquidity||m.liquidityNum||0),
       _endDate: m.endDate||m.end_date_iso||m.endDateIso};
   };
- 
+
   const viable = allMarkets.map(normalize).filter(m => {
     const price   = m._yesPrice;
     const liq     = m._liq;
@@ -832,14 +848,14 @@ async function runScan() {
     const hours   = endDate ? (endDate-new Date())/3600000 : 999;
     return price>PROB_FLOOR && price<PROB_CEILING && liq>=MIN_LIQUIDITY && hours>BLACKOUT_HOURS;
   }).slice(0,35);
- 
+
   console.log(`✅ ${viable.length} viable markets after filtering`);
- 
+
   for (const market of viable) {
     if (getOpenTrades().length>=MAX_POSITIONS) break;
     try {
       scanned++;
- 
+
       // Ensure market has normalized fields
       if (!market._yesPrice) {
         try { const op=market.outcomePrices; market._yesPrice=typeof op==="string"?parseFloat(JSON.parse(op)[0]):parseFloat(Array.isArray(op)?op[0]:op||0.5); } catch { market._yesPrice=0.5; }
@@ -849,18 +865,18 @@ async function runScan() {
       // Layer 1: Order book pressure
       const obPressure = await detectOrderBookPressure(market);
       await delay(200);
- 
+
       // Layer 2: Whale activity
       const whaleActivity = await getWhaleActivity(market);
       await delay(200);
- 
+
       // Layer 2: Market divergence
       const divergence = detectMarketDivergence(market, allMarkets);
- 
+
       // Layer 2: Resolution source
       const resSource = await checkResolutionSource(market);
       await delay(200);
- 
+
       // All 6 agents
       const whaleRes  = agentWhaleCopy(whaleActivity);
       const newsRes   = await agentNewscat(market);
@@ -870,7 +886,7 @@ async function runScan() {
       const techRes   = await agentTechnical(market);
       const mathRes   = await agentResolutionMath(market);
       const stealthRes= agentStealth(whaleActivity, newsRes, sentRes);
- 
+
       const allAgents = [
         {...whaleRes,  name:"Whale"},
         {...stealthRes,name:"Stealth"},
@@ -879,18 +895,18 @@ async function runScan() {
         {...techRes,   name:"Technical"},
         {...mathRes,   name:"ResolutionMath"},
       ];
- 
+
       const consensus = runConsensus(allAgents, whaleRes, stealthRes);
- 
+
       db.prepare("INSERT INTO scan_log (market_id,market_question,agents_fired,consensus,action) VALUES (?,?,?,?,?)")
         .run(market.id, market.question, allAgents.filter(a=>a.vote).map(a=>a.name).join(","), consensus.votes, consensus.action);
- 
+
       // Update news items status if this market triggers a trade
       if (consensus.action==="ENTER") {
         db.prepare("UPDATE news_items SET status='triggered' WHERE market_id=? AND status='monitored'")
           .run(market.id);
       }
- 
+
       if (consensus.action==="ENTER") {
         const guard = checkGuardrails(market, consensus);
         if (guard.ok) {
@@ -900,26 +916,26 @@ async function runScan() {
           console.log(`🚫 Blocked: ${market.question?.slice(0,50)} — ${guard.reason}`);
         }
       }
- 
+
       await delay(500);
     } catch(e) { console.error("Scan error:", market.question?.slice(0,40), e.message); }
   }
- 
+
   await tg(`<b>VeraPimpo Scan Complete</b>\n${traded} trades | ${scanned} scanned | ${viable.length} viable\nDeployed: $${getDeployed().toFixed(2)}/$${BUDGET}`);
   await monitorPositions();
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // WHALE REFRESH (daily)
 // ══════════════════════════════════════════════════════════
- 
+
 async function refreshWhales() {
   console.log("🐋 Daily whale refresh starting...");
   try {
     // Pull top market makers from recent trades
     const markets = await getMarkets(50,0);
     const walletStats = {};
- 
+
     for (const market of markets.slice(0,20)) {
       try {
         const trades = await getRecentTrades(market.id, 100);
@@ -936,7 +952,7 @@ async function refreshWhales() {
         await delay(300);
       } catch {}
     }
- 
+
     // Score and rank wallets
     const scored = Object.entries(walletStats)
       .filter(([,s])=>s.total>=10 && s.recent>=1)
@@ -947,12 +963,12 @@ async function refreshWhales() {
       })
       .sort((a,b)=>b.score-a.score)
       .slice(0,50);
- 
+
     // Update DB
     let newWhales=0, dropped=0;
     const prevAddrs = new Set(db.prepare("SELECT address FROM whales").all().map(w=>w.address));
     const newAddrs  = new Set(scored.map(w=>w.addr));
- 
+
     for (const [i, w] of scored.entries()) {
       const tier   = i<5?1:i<20?2:3;
       const days   = db.prepare("SELECT days_in_top50,confirmed FROM whales WHERE address=?").get(w.addr);
@@ -962,7 +978,7 @@ async function refreshWhales() {
         .run(w.addr,i+1,w.winRate,w.profit/w.total,w.total,w.recent,w.profit,tier,newDays,conf);
       if (!prevAddrs.has(w.addr)) newWhales++;
     }
- 
+
     // Mark dropped wallets
     for (const addr of prevAddrs) {
       if (!newAddrs.has(addr)) {
@@ -970,7 +986,7 @@ async function refreshWhales() {
         dropped++;
       }
     }
- 
+
     const confirmed = db.prepare("SELECT COUNT(*) as c FROM whales WHERE confirmed=1").get()?.c||0;
     const msg =
       `<b>VeraPimpo Whale Refresh</b>\n\n` +
@@ -984,24 +1000,24 @@ async function refreshWhales() {
     console.log(`✅ Whale refresh: ${scored.length} ranked, ${confirmed} confirmed`);
   } catch(e) { console.error("Whale refresh:", e.message); }
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // TELEGRAM BOT
 // ══════════════════════════════════════════════════════════
- 
+
 const bot = cfg.telegram ? new Telegraf(cfg.telegram) : null;
- 
+
 if (bot) {
   bot.use(async (ctx, next) => {
     if (ctx.from && !isAuthorized(ctx.from.id)) { await ctx.reply("Unauthorized."); return; }
     return next();
   });
- 
+
   bot.start(ctx=>ctx.replyWithHTML(
     `<b>VeraPimpo v1.0</b>\n\nPolymarket Intelligence Agent\nPaper Trading Mode — $${BUDGET} budget\n\n` +
     `/portfolio /positions /history /whales /markets /news /strategy /pause /resume /status /live`
   ));
- 
+
   bot.command("portfolio", async ctx=>{
     const open   = getOpenTrades();
     const pnl    = getState("total_pnl")||0;
@@ -1020,7 +1036,7 @@ if (bot) {
       `Daily trades: ${getState("daily_trades")||0}/${MAX_DAILY_TRADES}`
     );
   });
- 
+
   bot.command("positions", ctx=>{
     const open=getOpenTrades();
     if (!open.length){ctx.reply("No open paper positions.");return;}
@@ -1034,7 +1050,7 @@ if (bot) {
     });
     ctx.replyWithHTML(msg);
   });
- 
+
   bot.command("history", ctx=>{
     const rows=db.prepare("SELECT * FROM paper_trades WHERE status='closed' ORDER BY closed_at DESC LIMIT 15").all();
     if (!rows.length){ctx.reply("No closed paper trades yet.");return;}
@@ -1042,7 +1058,7 @@ if (bot) {
     rows.forEach(t=>{msg+=`${t.pnl>=0?"🟢":"🔴"} ${t.market_question?.slice(0,45)} — ${t.pnl>=0?"+":""}$${t.pnl?.toFixed(2)} [${t.exit_reason}]\n`;});
     ctx.replyWithHTML(msg);
   });
- 
+
   bot.command("whales", async ctx=>{
     const whales=db.prepare("SELECT * FROM whales WHERE confirmed=1 ORDER BY rank LIMIT 10").all();
     if (!whales.length){ctx.reply("No confirmed whales yet. Check back after first daily refresh.");return;}
@@ -1050,7 +1066,7 @@ if (bot) {
     whales.forEach(w=>{msg+=`#${w.rank} ${w.address.slice(0,10)}... | Tier ${w.tier} | Win: ${(w.win_rate*100).toFixed(0)}% | 30d: $${w.profit_30d?.toFixed(0)}\n`;});
     ctx.replyWithHTML(msg);
   });
- 
+
   bot.command("markets", async ctx=>{
     ctx.replyWithHTML("<i>Fetching top markets...</i>");
     const markets=await getMarkets(20,0);
@@ -1067,7 +1083,7 @@ if (bot) {
     });
     ctx.replyWithHTML(msg);
   });
- 
+
   bot.command("news", ctx=>{
     const news=db.prepare("SELECT * FROM news_items ORDER BY fetched_at DESC LIMIT 10").all();
     if (!news.length){ctx.reply("No news items yet.");return;}
@@ -1075,7 +1091,7 @@ if (bot) {
     news.forEach(n=>{msg+=`[${n.status.toUpperCase()}] ${n.source}\n${n.headline?.slice(0,80)}\n\n`;});
     ctx.replyWithHTML(msg);
   });
- 
+
   bot.command("strategy", ctx=>{
     const strategies=["Whale","Stealth","News","Sentiment","Technical","ResolutionMath"];
     let msg=`<b>Strategy Performance</b>\n\n`;
@@ -1087,17 +1103,17 @@ if (bot) {
     }
     ctx.replyWithHTML(msg);
   });
- 
+
   bot.command("scan", async ctx=>{
     ctx.replyWithHTML("<i>Manual scan triggered — running all 6 agents across viable markets...</i>");
     runScan();
   });
- 
+
   bot.command("whalesscan", async ctx=>{
     ctx.replyWithHTML("<i>Manual whale scan triggered — this takes 1-2 minutes...</i>");
     refreshWhales().then(()=>ctx.replyWithHTML("Whale scan complete. Send /whales to see updated rankings."));
   });
- 
+
   bot.command("pause",   ctx=>{setState("paused",true);  ctx.reply("⏸️ VeraPimpo paused.");});
   bot.command("resume",  ctx=>{setState("paused",false); ctx.reply("▶️ VeraPimpo resumed.");});
   bot.command("status",  async ctx=>{
@@ -1124,22 +1140,22 @@ if (bot) {
   ));
   bot.help(ctx=>ctx.replyWithHTML(`/portfolio /scan /positions /history /whales /whalesscan /markets /news /strategy /pause /resume /status /live`));
 }
- 
+
 // ══════════════════════════════════════════════════════════
 // REST API (for dashboard)
 // ══════════════════════════════════════════════════════════
- 
+
 const app = express();
 app.use(cors());
 app.use(express.json());
- 
+
 // Simple password middleware for API
 app.use("/api", (req,res,next)=>{
   const pass = req.headers["x-dashboard-password"]||req.query.password;
   if (pass!==cfg.dashPass) return res.status(401).json({error:"Unauthorized"});
   next();
 });
- 
+
 app.get("/api/overview", (req,res)=>{
   const open   = getOpenTrades();
   const pnl    = getState("total_pnl")||0;
@@ -1150,46 +1166,50 @@ app.get("/api/overview", (req,res)=>{
   const today  = db.prepare("SELECT COUNT(*) as c FROM paper_trades WHERE date(opened_at)=date('now')").get()?.c||0;
   res.json({ budget:BUDGET,deployed:dep,available:BUDGET-dep,pnl,loss,lossHalt:LOSS_HALT,openCount:open.length,maxPositions:MAX_POSITIONS,winRate:total>0?wins/total:0,totalTrades:total,todayTrades:today,maxDailyTrades:MAX_DAILY_TRADES,paper:PAPER,paused:getState("paused")||false });
 });
- 
+
 app.get("/api/positions", (req,res)=>{
   const positions = db.prepare("SELECT * FROM paper_trades WHERE status='open' ORDER BY opened_at DESC").all();
   res.json(positions);
 });
- 
+
 app.get("/api/history", (req,res)=>{
   const limit = parseInt(req.query.limit)||50;
   const rows  = db.prepare("SELECT * FROM paper_trades WHERE status='closed' ORDER BY closed_at DESC LIMIT ?").all(limit);
   res.json(rows);
 });
- 
+
 app.get("/api/whales", (req,res)=>{
   const whales = db.prepare("SELECT * FROM whales ORDER BY rank").all();
   res.json(whales);
 });
- 
+
 app.get("/api/whale-trades", (req,res)=>{
   const rows = db.prepare("SELECT * FROM whale_trades ORDER BY timestamp DESC LIMIT 50").all();
   res.json(rows);
 });
- 
+
 app.get("/api/markets", async (req,res)=>{
   try {
+    // First try DB cache (populated during scans)
+    const cached = db.prepare("SELECT * FROM markets ORDER BY score DESC, last_scanned DESC LIMIT 35").all();
+    if (cached.length > 0) { res.json(cached); return; }
+    // Fallback: fetch live
     const markets = await getMarkets(50,0);
-    const viable  = (markets||[]).filter(m=>{
-      const p=parseFloat(m.outcomePrices?.[0]||0);
-      const liq=parseFloat(m.liquidity||0);
-      return p>PROB_FLOOR&&p<PROB_CEILING&&liq>=MIN_LIQUIDITY;
-    }).slice(0,35);
+    const viable  = (markets||[]).map(m=>{
+      let yp=0;
+      try { const op=m.outcomePrices; yp=typeof op==="string"?parseFloat(JSON.parse(op)[0]):parseFloat(Array.isArray(op)?op[0]:0.5); } catch { yp=0.5; }
+      return {...m, _yesPrice:yp, _liq:parseFloat(m.liquidity||0)};
+    }).filter(m=>m._yesPrice>PROB_FLOOR&&m._yesPrice<PROB_CEILING&&m._liq>=MIN_LIQUIDITY).slice(0,35);
     res.json(viable);
   } catch(e) { res.status(500).json({error:e.message}); }
 });
- 
+
 app.get("/api/news", (req,res)=>{
   const limit = parseInt(req.query.limit)||50;
   const rows  = db.prepare("SELECT * FROM news_items ORDER BY fetched_at DESC LIMIT ?").all(limit);
   res.json(rows);
 });
- 
+
 app.get("/api/strategy", (req,res)=>{
   const strategies=["Whale","Stealth","News","Sentiment","Technical","ResolutionMath"];
   const result=strategies.map(s=>({
@@ -1201,30 +1221,30 @@ app.get("/api/strategy", (req,res)=>{
   }));
   res.json(result);
 });
- 
+
 app.get("/api/alerts", (req,res)=>{
   const rows=db.prepare("SELECT * FROM alerts ORDER BY created_at DESC LIMIT 100").all();
   res.json(rows);
 });
- 
+
 app.get("/api/scan-log", (req,res)=>{
   const rows=db.prepare("SELECT * FROM scan_log ORDER BY scanned_at DESC LIMIT 100").all();
   res.json(rows);
 });
- 
+
 app.post("/api/scan", async (req,res)=>{
   res.json({started:true, message:"Scan started"});
   runScan();
 });
- 
+
 app.post("/api/whalesscan", async (req,res)=>{
   res.json({started:true, message:"Whale scan started — check back in 1-2 minutes"});
   refreshWhales();
 });
- 
+
 app.post("/api/pause",  (req,res)=>{setState("paused",true);  res.json({paused:true});});
 app.post("/api/resume", (req,res)=>{setState("paused",false); res.json({paused:false});});
- 
+
 // Serve dashboard
 const fs   = require("fs");
 const pth  = require("path");
@@ -1237,12 +1257,12 @@ app.get("/", (req,res)=>{
     res.status(500).send("Dashboard not found. Upload dashboard.html to the repo root.");
   }
 });
- 
+
 // Health check (no auth)
 app.get("/health", (req,res)=>res.json({status:"ok",paper:PAPER,version:"1.0.0"}));
- 
+
 app.listen(3000, ()=>console.log("📊 VeraPimpo API running on port 3000"));
- 
+
 // ── SCHEDULES ─────────────────────────────────────────────
 // Main scan every 5 minutes
 let scanning=false;
@@ -1251,15 +1271,15 @@ setInterval(async()=>{
   scanning=true;
   try { await runScan(); } finally { scanning=false; }
 }, 300000);
- 
+
 // Position monitor every 2 minutes
 setInterval(async()=>{
   if (!getState("paused")) await monitorPositions();
 }, 120000);
- 
+
 // Whale refresh daily 6am Riyadh (3am UTC)
 cron.schedule("0 3 * * *", refreshWhales, {timezone:"UTC"});
- 
+
 // Daily briefing 9am Riyadh (6am UTC)
 cron.schedule("0 6 * * *", async()=>{
   const pnl  = getState("total_pnl")||0;
@@ -1274,7 +1294,7 @@ cron.schedule("0 6 * * *", async()=>{
     `Mode: ${PAPER?"PAPER":"LIVE"}`
   );
 }, {timezone:"UTC"});
- 
+
 // ── LAUNCH ────────────────────────────────────────────────
 async function launch() {
   console.log("⚡ VeraPimpo v1.0 starting...");
@@ -1298,7 +1318,7 @@ async function launch() {
   }, 60000);
   console.log("✅ VeraPimpo live");
 }
- 
+
 launch().catch(console.error);
 process.once("SIGINT",  ()=>{ if(bot) bot.stop("SIGINT");  process.exit(0); });
 process.once("SIGTERM", ()=>{ if(bot) bot.stop("SIGTERM"); process.exit(0); });
