@@ -917,6 +917,23 @@ async function scrapeTelegramChannels() {
   }
 }
 
+function getTelegramBoost(marketId, question) {
+  try {
+    const words = (question||"").toLowerCase().split(" ").filter(w=>w.length>4);
+    const msgs  = stmt.tgRecent.all();
+    let whale=0, news=0;
+    for(const m of msgs) {
+      const lower = (m.text||"").toLowerCase();
+      const matches = words.filter(w=>lower.includes(w)).length;
+      if(matches>=2 || m.market_id===marketId) {
+        if(m.channel_type==="whale") whale += (m.relevance_score||0)*0.3;
+        if(m.channel_type==="news")  news  += (m.relevance_score||0)*0.2;
+      }
+    }
+    return {whale:Math.min(1,whale), news:Math.min(1,news)};
+  } catch { return {whale:0, news:0}; }
+}
+
 // ── WHALE REFRESH ─────────────────────────────────────────
 async function refreshWhales() {
   console.log("Whale refresh...");
