@@ -1018,8 +1018,14 @@ async function loadPositions() {
       const targetPct = ((p.target_price - p.entry_price)/(1-p.entry_price))*100;
       const progressPct = Math.max(0,Math.min(100,((p.current_price-p.entry_price)/(p.target_price-p.entry_price))*100));
       const hoursLeft   = p.closes_at ? (new Date(p.closes_at)-new Date())/3600000 : 999;
+      const mtype = p.market_type||"general";
+      const mtypeColor = {crypto:"var(--blue)",commodity:"#D9B92F",political:"var(--purple)",sports:"var(--green)",economic:"var(--amber)",other:"var(--gray)"}[mtype]||"var(--gray)";
       return `
         <div class="position-card" style="animation-delay:${i*0.05}s">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span style="font-size:10px;font-weight:700;letter-spacing:1px;padding:2px 8px;border-radius:4px;border:1px solid ${mtypeColor}33;color:${mtypeColor};text-transform:uppercase">${mtype}</span>
+            ${p.signal_detail?`<span style="font-size:10px;color:var(--gray);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px" title="${p.signal_detail}">${p.signal_detail.slice(0,60)}</span>`:""}
+          </div>
           <div class="position-question">${p.market_question}</div>
           <div class="position-meta">
             <div class="position-meta-item">
@@ -1055,7 +1061,7 @@ async function loadPositions() {
             </div>
           </div>
           <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--gray);margin-top:6px">
-            <span>Progress to target: ${progressPct.toFixed(0)}%</span>
+            <span>Progress: ${progressPct.toFixed(0)}% ${p.trailing_stop&&p.trailing_stop>p.stop_price?`| Trail: ${(p.trailing_stop*100).toFixed(1)}%`:""}</span>
             <span style="color:${hoursLeft<6?"var(--red)":hoursLeft<24?"var(--amber)":"var(--gray)"}">${hoursLeft<999?`${hoursLeft.toFixed(0)}h left`:"No deadline"}</span>
           </div>
           <div class="position-agents" style="margin-top:12px">
@@ -1207,9 +1213,13 @@ async function loadScanner() {
       const days  = endDate ? Math.max(0,Math.floor((new Date(endDate)-new Date())/86400000)) : "?";
       const score = m.score || Math.round(Math.abs(price-0.5)*100 + Math.min(liq/100000,0.3)*30);
       const cat   = m.category||"General";
+      const mtypeC = {crypto:"var(--blue)",commodity:"#D9B92F",political:"var(--purple)",sports:"var(--green)",economic:"var(--amber)",other:"var(--gray)"}[m.market_type||"other"]||"var(--gray)";
       return `
         <div class="market-card" style="animation-delay:${i*0.04}s">
-          <div class="market-category">${cat}</div>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+            <div class="market-category" style="margin:0">${cat}</div>
+            ${m.market_type?`<span style="font-size:9px;font-weight:700;letter-spacing:1px;padding:1px 6px;border-radius:3px;border:1px solid ${mtypeC}44;color:${mtypeC};text-transform:uppercase">${m.market_type}</span>`:""}
+          </div>
           <div class="market-question">${m.question||"Unknown market"}</div>
           <div class="market-price-row">
             <div>
@@ -1319,7 +1329,7 @@ async function loadStrategy() {
         </div>
       </div>`;
     }).join("");
-    grid.innerHTML = html;
+    grid.innerHTML = catHtml + html;
   } catch {
     grid.innerHTML = `<div class="empty"><div class="empty-text">Failed to load strategy data</div></div>`;
   }
@@ -1410,9 +1420,11 @@ async function loadNews() {
       const isReddit = !isTelegram && (item.source||"").toLowerCase().includes("reddit");
       const sub = isReddit ? item.source.replace("Reddit r/","") : "";
       const statusBadge = `<span class="news-status ${item.status||"monitored"}">${(item.status||"monitored").toUpperCase()}</span>`;
+      const qualityBadge = item.signal_quality==="targeted"?`<span style="font-size:9px;font-weight:700;letter-spacing:0.5px;padding:2px 6px;border-radius:3px;background:rgba(63,185,80,0.12);color:var(--green);border:1px solid rgba(63,185,80,0.2)">TARGETED</span>`:"";
 
       // Telegram message card
       if (isTelegram) {
+        const qualityBadge = ""; // reset for telegram cards
         const chType = (item.channel_type||item.source||"").toLowerCase().includes("whale") ? "whale" : "news";
         const chLabel = item.source||"Telegram";
         return `
@@ -1449,7 +1461,7 @@ async function loadNews() {
       return `
         <div class="card" style="animation-delay:${i*0.03}s">
           ${item.image_url?`<img class="news-image" src="${item.image_url}" alt="" loading="lazy" onerror="this.style.display='none'">`:""}
-          <div class="news-source">${item.source} ${statusBadge}</div>
+          <div class="news-source">${item.source} ${statusBadge} ${qualityBadge}</div>
           <div class="news-headline">${item.headline}</div>
           ${item.summary?`<div class="news-summary">${item.summary.slice(0,300)}${item.summary.length>300?"...":""}</div>`:""}
           ${item.market_question?`<div class="news-market">Related market: ${item.market_question.slice(0,70)}</div>`:""}
