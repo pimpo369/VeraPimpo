@@ -786,11 +786,19 @@ async function attemptLogin(pass, remember) {
     const verify = await fetch(`${API}/api/overview?password=${pass}`);
     if (verify.ok) {
       password = pass;
-      if (remember) localStorage.setItem("vp_pass", pass);
-      else localStorage.removeItem("vp_pass");
+      // sessionStorage — active session only, clears on tab close
+      sessionStorage.setItem("vp_session", pass);
+      // localStorage — only if remember me is checked
+      if (remember) {
+        const expiry = Date.now() + 7 * 24 * 3600 * 1000; // 7 days
+        localStorage.setItem("vp_pass", JSON.stringify({ pass, expiry }));
+      } else {
+        localStorage.removeItem("vp_pass");
+      }
       document.getElementById("login-screen").style.display = "none";
       document.getElementById("app").classList.add("visible");
       loadOverview();
+      loadTicker();
       return true;
     } else {
       document.getElementById("login-error").textContent = "Incorrect password";
@@ -812,17 +820,30 @@ document.getElementById("pass-input").addEventListener("keydown", e => {
   if (e.key === "Enter") document.getElementById("login-btn").click();
 });
 
-// Auto-login if saved password exists
+// Auto-login: check sessionStorage first (tab still open), then localStorage (remember me)
 window.addEventListener("load", async () => {
+  // 1. Session still active in this browser session
+  const session = sessionStorage.getItem("vp_session");
+  if (session) {
+    const ok = await attemptLogin(session, false);
+    if (ok) return;
+    sessionStorage.removeItem("vp_session");
+  }
+  // 2. Remember me — check expiry
   const saved = localStorage.getItem("vp_pass");
   if (saved) {
-    document.getElementById("pass-input").value = saved;
-    document.getElementById("remember-me").checked = true;
-    const ok = await attemptLogin(saved, true);
-    if (!ok) {
-      localStorage.removeItem("vp_pass");
-      document.getElementById("pass-input").value = "";
-    }
+    try {
+      const { pass, expiry } = JSON.parse(saved);
+      if (Date.now() < expiry) {
+        document.getElementById("pass-input").value = pass;
+        document.getElementById("remember-me").checked = true;
+        const ok = await attemptLogin(pass, true);
+        if (!ok) { localStorage.removeItem("vp_pass"); document.getElementById("pass-input").value = ""; }
+      } else {
+        // Expired — clear it
+        localStorage.removeItem("vp_pass");
+      }
+    } catch { localStorage.removeItem("vp_pass"); }
   }
 });
 
@@ -1448,10 +1469,18 @@ let tickerMarkets = [];
 async function loadTicker() {
   try {
     const markets = await api("/markets");
-    if (!markets?.length) return;
+    if (!markets?.length) {
+      // Markets not cached yet — show placeholder and retry in 30s
+      const track = document.getElementById("ticker-track");
+      if (track) track.innerHTML = `<div class="ticker-item" style="color:var(--gray)">Scanning markets — ticker updates after first scan...</div>`;
+      setTimeout(() => { if(password) loadTicker(); }, 30000);
+      return;
+    }
     tickerMarkets = markets;
     renderTicker(markets);
-  } catch {}
+  } catch(e) {
+    console.error("Ticker:", e.message);
+  }
 }
 
 function renderTicker(markets) {
@@ -1477,11 +1506,27 @@ function renderTicker(markets) {
   track.innerHTML = items + items;
 }
 
-// Load ticker on boot and refresh every 2 hours
-loadTicker();
-setInterval(loadTicker, 7200000);
+// Ticker refreshes every 2 hours after initial load triggered by login
+setInterval(() => { if (password) loadTicker(); }, 7200000);
 
 // ── OVERVIEW AUTO-REFRESH ──────────────────────────────
+// Global JS error boundary — catches crashes before they show blank screen
+window.addEventListener("error", (e) => {
+  console.error("JS Error:", e.message, e.filename, e.lineno);
+  const grid = document.querySelector(".page.active .masonry, .page.active #history-list, .page.active #alerts-list");
+  if (grid && !grid.dataset.errorShown) {
+    grid.dataset.errorShown = "1";
+    grid.innerHTML += `<div class="empty" style="color:var(--amber)">
+      <div class="empty-icon">⚠️</div>
+      <div class="empty-text">Something went wrong loading this section. Try refreshing.</div>
+    </div>`;
+  }
+});
+
+window.addEventListener("unhandledrejection", (e) => {
+  console.error("Unhandled promise:", e.reason);
+});
+
 // Auto-refresh overview every 60 seconds
 setInterval(()=>{ if(document.querySelector(".nav-btn.active")?.dataset?.page==="overview") loadOverview(); }, 60000);
 </script>
