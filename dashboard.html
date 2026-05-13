@@ -1410,9 +1410,18 @@ async function loadNews() {
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
-    }).slice(0,60);
+    }).slice(0,80);
     if (!items.length) {
-      grid.innerHTML = `<div class="empty"><div class="empty-icon">📰</div><div class="empty-text">News feed populates when the agent starts scanning markets.</div></div>`;
+      grid.innerHTML = `<div class="empty">
+        <div class="empty-icon">📰</div>
+        <div class="empty-text">News feed is empty — triggering scan now...</div>
+      </div>`;
+      // Auto-trigger scan and reload after 3 minutes
+      try {
+        await fetch(\`\${API}/api/scan\`, {method:"POST", headers:{"x-dashboard-password":password}});
+        setTimeout(async () => { await loadNews(); }, 180000);
+        setTimeout(async () => { await loadNews(); }, 60000);
+      } catch {}
       return;
     }
     grid.innerHTML = items.map((item,i)=>{
