@@ -86,11 +86,17 @@ function classifyMarket(question) {
     "nfl","nba","mlb","nhl","soccer","football","basketball","baseball","tennis","ufc","mma","fight",
     "championship","super bowl","world cup","playoffs","series","tournament","score","defeat",
     "draw","penalty","vs.","v.s.","premier league","bundesliga","serie a","ligue 1","la liga",
-    "champions league","europa league","conference league","mls","bundesliga",
-    " fc "," sk "," cf "," ac "," afc "," sc "," if "," bk ",
+    "champions league","europa league","conference league","mls","ucl",
+    " fc "," sk "," cf "," ac "," afc "," sc "," if "," bk "," utd "," city "," united ",
     "match","fixture","kickoff","kick-off","halftime","full time","overtime","innings",
     "quarterback","touchdown","goal","hat trick","hat-trick","red card","yellow card",
-    "spread","over/under","o/u","moneyline","handicap"
+    "spread","over/under","o/u","moneyline","handicap",
+    "win on 20","beat on 20","defeat on 20",  // "Will X win on 2026-05-17"
+    "rcd ","cf ","atletico","real madrid","barcelona","juventus","arsenal","chelsea",
+    "liverpool","manchester","tottenham","milan","roma","napoli","porto","ajax","psg",
+    "lakers","celtics","warriors","nuggets","heat","bulls","knicks","nets",
+    "yankees","dodgers","mets","cubs","red sox","astros",
+    "cowboys","chiefs","patriots","eagles","packers","rams","49ers"
   ].some(w=>q.includes(w))) return "sports";
   return "other";
 }
@@ -807,14 +813,18 @@ async function executePaperTrade(market, consensus, agents, guard, specializedRe
   const shares=+(size/price).toFixed(4);
   const stopPrice=+(Math.max(G.FLOOR,price*(1-G.STOP_PCT))).toFixed(4);
   const trailingStop=stopPrice;
-  // Target is time-aware and market-type-aware
-  // Short-resolution (<72h): target 50-65% — market won't drift far from current price
-  // Medium (1-7 days): target 70-80%
-  // Long (>7 days): target up to EXIT_TARGET
+  // Target is time-aware: realistic based on hours to resolution
   const endDate=market._endDate?new Date(market._endDate):null;
   const hoursLeft=endDate?(endDate-new Date())/3600000:999;
-  const targetCap = hoursLeft<24?0.62:hoursLeft<72?0.72:hoursLeft<168?0.82:0.92;
-  const target=+(Math.min(targetCap, price+(1-price)*(hoursLeft<72?0.45:hoursLeft<168?0.65:G.EXIT_TARGET))).toFixed(4);
+  // For short markets (sports/same day): modest target — won't move far
+  // For medium (1-7 days): moderate target
+  // For long (>7 days): conservative — markets are slow to reprice
+  let targetMult, targetCap;
+  if(hoursLeft<24)       { targetMult=0.40; targetCap=0.62; }
+  else if(hoursLeft<72)  { targetMult=0.50; targetCap=0.72; }
+  else if(hoursLeft<168) { targetMult=0.60; targetCap=0.80; }
+  else                   { targetMult=0.55; targetCap=0.75; } // long duration — be conservative
+  const target=+(Math.min(targetCap, price+(1-price)*targetMult)).toFixed(4);
   const fired=agents.filter(a=>a.vote&&!a.inactive).map(a=>a.name).join(",");
   const mtype=market._type||classifyMarket(market.question);
   const sigDetail=specializedResult?.detail||"";
