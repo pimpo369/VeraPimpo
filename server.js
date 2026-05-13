@@ -49,25 +49,25 @@ const cfg = {
 // ── GUARDRAILS v3 — tighter, smarter ─────────────────────
 const G = {
   BUDGET        : 500,
-  MAX_POS       : 50,    // max $ per trade
+  MAX_POS       : 50,
   MAX_POSITIONS : 8,
   LOSS_HALT     : 150,
   BLACKOUT_HRS  : 2,
-  CEIL          : 0.60,  // was 0.85 — above 60% no real upside
-  FLOOR         : 0.20,  // was 0.15 — below 20% is lottery
-  MIN_LIQ       : 25000, // was 10000 — thinner markets = manipulation
+  CEIL          : 0.65,  // raised slightly — 65% ceiling
+  FLOOR         : 0.18,  // lowered slightly — 18% floor
+  MIN_LIQ       : 15000, // $15k — less restrictive
   MAX_MKT_SHARE : 0.03,
-  MIN_EDGE      : 0.08,  // was 0.05 — 8% minimum detectable edge
+  MIN_EDGE      : 0.07,  // 7% minimum edge
   MAX_DAILY     : 10,
   MAX_CAT_DEP   : 0.30,
   EXIT_TARGET   : 0.85,
   VOL_SPIKE     : 3.0,
   STOP_PCT      : 0.15,
-  TRAIL_PCT     : 0.10,  // trailing stop — trail 10% below peak
-  MIN_DAYS      : 1,     // minimum days to resolution
-  MAX_DAYS      : 14,    // maximum days — sweet spot
-  KELLY_FRAC    : 0.25,  // use 25% Kelly for safety
-  MAX_CORR_CAT  : 2,     // max 2 positions in same market type
+  TRAIL_PCT     : 0.10,
+  MIN_DAYS      : 0.08,  // 2 hours minimum — blackout handles the real floor
+  MAX_DAYS      : 21,    // 21 days — wider window
+  KELLY_FRAC    : 0.25,
+  MAX_CORR_CAT  : 2,
 };
 
 // ── MARKET TYPES ──────────────────────────────────────────
@@ -474,10 +474,13 @@ async function fetchPoliticalSignal(market) {
   return {signal:recent.length>0,confidence:conf,articles:recent.length,headlines,detail:`${recent.length} articles in 24h: ${headlines[0]?.slice(0,60)||""}`};
 }
 
-// SPORTS: ESPN RSS + targeted search
+// SPORTS: ESPN RSS + targeted search + market mechanics analysis
 async function fetchSportsSignal(market) {
   const terms=extractKeyTerms(market.question);
   const query=encodeURIComponent(terms.slice(0,2).join(" "));
+  const price=market._yesPrice||extractPrice(market);
+  const endDate=market._endDate?new Date(market._endDate):null;
+  const hoursLeft=endDate?(endDate-new Date())/3600000:999;
 
   const [gg,espn]=await Promise.all([
     safeFetchText(`https://news.google.com/rss/search?q=${query}+sport&hl=en-US&gl=US&ceid=US:en`),
@@ -501,7 +504,19 @@ async function fetchSportsSignal(market) {
     }
   }
 
-  return {signal:articles>0,confidence:Math.min(0.8,articles*0.2),articles,detail:`${articles} sports articles | ${headlines[0]?.slice(0,60)||"No recent coverage"}`};
+  // Base confidence from market mechanics alone (no article match needed)
+  // Sports markets have genuine Polymarket liquidity and resolve on known outcomes
+  // Price 20-45% on a binary sports outcome = real mispricing opportunity
+  const mechanicsConf = price<=0.45 && hoursLeft<=48 ? 0.45 : price<=0.35 ? 0.4 : 0.3;
+  const articleBoost  = articles * 0.1;
+  const confidence    = Math.min(0.85, mechanicsConf + articleBoost);
+
+  return {
+    signal: confidence >= 0.3,
+    confidence,
+    articles,
+    detail: `Sports: ${articles} articles | ${(price*100).toFixed(1)}% price | ${hoursLeft.toFixed(0)}h left${headlines[0]?" | "+headlines[0].slice(0,50):""}`
+  };
 }
 
 // ECONOMIC: Fed + MarketWatch targeted
@@ -685,16 +700,22 @@ function agentResolutionMath(market) {
 
 // ── CONSENSUS ENGINE v3 ───────────────────────────────────
 function runConsensus(agents, whaleRes, stealthRes, hasConfirmedWhales) {
-  // Only count active agents in total
-  const active=agents.filter(a=>!a.inactive);
-  const votes=active.filter(a=>a.vote).length;
-  const total=active.length;
-  const tier=whaleRes?.tier||99;
+  const active = agents.filter(a=>!a.inactive);
+  const votes  = active.filter(a=>a.vote).length;
+  const total  = active.length;
+  const tier   = whaleRes?.tier||99;
 
+  // Whale signals (only when confirmed whales exist)
   if(hasConfirmedWhales&&tier===1&&whaleRes?.vote) return {action:"ENTER",size_mult:0.5,label:"TIER1_WHALE",votes,total};
   if(hasConfirmedWhales&&stealthRes?.vote&&tier<=2) return {action:"ENTER",size_mult:0.25,label:"STEALTH",votes,total};
-  if(votes>=Math.ceil(total*0.7)) return {action:"ENTER",size_mult:1.0,label:votes>=total?"FULL_CONSENSUS":"STRONG",votes,total};
-  if(votes>=Math.ceil(total*0.5)) return {action:"ENTER",size_mult:0.5,label:"MODERATE",votes,total};
+
+  // When whales inactive: 5 real agents — need 2 to enter (conservative)
+  // When whales active: 7 agents — need 70% (5) for full, 50% (4) for moderate
+  const fullThreshold = hasConfirmedWhales ? Math.ceil(total*0.7) : Math.ceil(total*0.5);
+  const modThreshold  = hasConfirmedWhales ? Math.ceil(total*0.5) : 2;
+
+  if(votes>=fullThreshold) return {action:"ENTER",size_mult:1.0,label:votes>=total?"FULL_CONSENSUS":"STRONG",votes,total};
+  if(votes>=modThreshold)  return {action:"ENTER",size_mult:0.5,label:"MODERATE",votes,total};
   return {action:"SKIP",size_mult:0,label:"INSUFFICIENT",votes,total};
 }
 
