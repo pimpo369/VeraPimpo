@@ -1294,37 +1294,59 @@ async function loadStrategy() {
   const grid = document.getElementById("strategy-grid");
   grid.innerHTML = `<div class="loading"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>`;
   try {
-    const strats = await api("/strategy");
+    let strats = [], catPerf = [];
+    try { strats = await api("/strategy"); } catch {}
+    try { catPerf = await api("/category-performance"); } catch {}
+
+    if (!strats || !strats.length) {
+      grid.innerHTML = `<div class="empty"><div class="empty-text">No strategy data yet — will populate as trades close.</div></div>`;
+      return;
+    }
+
     const maxTrades = Math.max(...strats.map(s=>s.trades), 1);
-    const total    = strats.reduce((a,s)=>a+s.trades,0);
-    const totalPnl = strats.reduce((a,s)=>a+(s.pnl||0),0);
-    const allWins  = strats.reduce((a,s)=>a+s.wins,0);
-    const globalWr = total>0?`${((allWins/total)*100).toFixed(1)}%`:"Waiting for first trade";
+    const total     = strats.reduce((a,s)=>a+s.trades,0);
+    const totalPnl  = strats.reduce((a,s)=>a+(s.pnl||0),0);
+    const allWins   = strats.reduce((a,s)=>a+s.wins,0);
+    const globalWr  = total>0?`${((allWins/total)*100).toFixed(1)}%`:"Waiting for first trade";
+
+    // Category performance card
+    let catHtml = "";
+    if (catPerf && catPerf.length) {
+      catHtml = `<div class="card">
+        <div class="card-label">Performance by Market Type</div>
+        <div style="margin-top:8px">`;
+      for (const c of catPerf) {
+        const wr = c.trades>0?((c.wins/c.trades)*100).toFixed(0):"0";
+        const wrColor = parseInt(wr)>=65?"var(--green)":parseInt(wr)>=50?"var(--blue)":"var(--red)";
+        catHtml += `<div class="strat-row">
+          <div class="strat-name" style="text-transform:capitalize">${c.market_type||"?"}</div>
+          <div class="strat-bar-wrap"><div class="strat-bar"><div class="strat-fill" style="width:${wr}%;background:${wrColor}"></div></div></div>
+          <div class="strat-stats"><div class="strat-wr" style="color:${wrColor}">${wr}%</div><div class="strat-pnl">${fmt$(c.total_pnl||0)}</div></div>
+        </div>`;
+      }
+      catHtml += `</div></div>`;
+    }
 
     let html = `
       <div class="card">
         <div class="card-label">All Strategies</div>
         <div class="card-value ${total===0?"val-white":totalPnl>=0?"val-green":"val-red"}">${total===0?"$0.00":fmt$(totalPnl)}</div>
-        <div class="card-sub">${total} trades closed • ${globalWr}</div>
+        <div class="card-sub">${total} trades closed · ${globalWr}</div>
       </div>
       <div class="card">
-        <div class="card-label">Strategy Performance</div>
+        <div class="card-label">Agent Performance</div>
         <div style="margin-top:8px">`;
     html += strats.map(s=>{
-      const wr      = s.trades>0?((s.wins/s.trades)*100).toFixed(0):null;
+      const wr = s.trades>0?((s.wins/s.trades)*100).toFixed(0):null;
       const wrColor = wr===null?"var(--gray)":parseInt(wr)>=65?"var(--green)":parseInt(wr)>=50?"var(--blue)":"var(--red)";
       return `<div class="strat-row">
         <div class="strat-name">${s.name}</div>
         <div class="strat-bar-wrap"><div class="strat-bar"><div class="strat-fill" style="width:${(s.trades/maxTrades)*100}%;background:${wrColor}"></div></div></div>
-        <div class="strat-stats">
-          <div class="strat-wr" style="color:${wrColor}">${wr!==null?wr+"%":"—"}</div>
-          <div class="strat-pnl">${fmt$(s.pnl||0)}</div>
-        </div>
+        <div class="strat-stats"><div class="strat-wr" style="color:${wrColor}">${wr!==null?wr+"%":"—"}</div><div class="strat-pnl">${fmt$(s.pnl||0)}</div></div>
       </div>`;
     }).join("");
     html += `</div></div>`;
 
-    // Individual agent cards
     html += strats.map((s,i)=>{
       const hasData  = s.trades > 0;
       const wr       = hasData?((s.wins/s.trades)*100).toFixed(1):null;
@@ -1332,26 +1354,22 @@ async function loadStrategy() {
       const wrColor  = !hasData?"val-white":wrN>=65?"val-green":wrN>=50?"val-blue":"val-red";
       const barColor = !hasData?"gray":wrN>=65?"green":"blue";
       return `<div class="card" style="animation-delay:${i*0.05}s">
-        <div class="card-label">${s.name.toUpperCase()}</div>
+        <div class="card-label">${(s.name||"").toUpperCase()}</div>
         <div class="card-value ${wrColor}" style="${!hasData?"font-size:28px;color:var(--gray)":""}">${hasData?wr+"%":"—"}</div>
-        <div class="card-sub">${s.trades} trades • Avg ${fmt$(s.avg_pnl||0)}/trade</div>
+        <div class="card-sub">${s.trades} trades · Avg ${fmt$(s.avg_pnl||0)}/trade</div>
         <div class="progress-wrap">
-          <div class="progress-label">
-            <span>${hasData?"Win Rate":"Waiting for trades"}</span>
-            <span>${fmt$(s.pnl||0)} total</span>
-          </div>
-          <div class="progress-bar">
-            <div class="progress-fill ${barColor}" style="width:${hasData?wrN:0}%"></div>
-          </div>
+          <div class="progress-label"><span>${hasData?"Win Rate":"Waiting for trades"}</span><span>${fmt$(s.pnl||0)} total</span></div>
+          <div class="progress-bar"><div class="progress-fill ${barColor}" style="width:${hasData?wrN:0}%"></div></div>
         </div>
       </div>`;
     }).join("");
+
     grid.innerHTML = catHtml + html;
-  } catch {
-    grid.innerHTML = `<div class="empty"><div class="empty-text">Failed to load strategy data</div></div>`;
+  } catch(e) {
+    console.error("Strategy error:", e);
+    grid.innerHTML = `<div class="empty"><div class="empty-text">Failed to load strategy data: ${e.message}</div></div>`;
   }
 }
-
 // ── ALERTS ────────────────────────────────────────────
 async function loadAlerts() {
   const list = document.getElementById("alerts-list");
