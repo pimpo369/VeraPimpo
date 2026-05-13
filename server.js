@@ -1030,6 +1030,14 @@ async function runScan() {
 
       const consensus=runConsensus(allAgents,whaleRes,stealthRes,hasConfirmedWhales);
 
+      // ── SCAN DIAGNOSTICS ──
+      const _active=allAgents.filter(a=>!a.inactive);
+      const _votes=_active.filter(a=>a.vote).map(a=>a.name);
+      const _price=market._yesPrice||extractPrice(market);
+      const _days=market._endDate?(new Date(market._endDate)-new Date())/86400000:999;
+      const _liq=market._liq||0;
+      console.log(`[SCAN] ${market._type} ${(_price*100).toFixed(1)}% ${_days.toFixed(1)}d $${_liq.toLocaleString()} → ${consensus.action}[${_votes.length}/${_active.length}] votes:${_votes.join(",")||"NONE"} spec:${(specSig.confidence*100).toFixed(0)}%`);
+
       if(consensus.action==="ENTER"){
         stmt.updateNewsStatus.run(market.id);
         const guard=checkGuardrails(market,consensus,specSig);
@@ -1122,6 +1130,57 @@ if(bot){
     for(const s of agents){const total=db.prepare("SELECT COUNT(*) as c FROM paper_trades WHERE status='closed' AND agents_fired LIKE ?").get(`%${s}%`)?.c||0;const wins=db.prepare("SELECT COUNT(*) as c FROM paper_trades WHERE status='closed' AND pnl>0 AND agents_fired LIKE ?").get(`%${s}%`)?.c||0;const pnl=db.prepare("SELECT SUM(pnl) as p FROM paper_trades WHERE status='closed' AND agents_fired LIKE ?").get(`%${s}%`)?.p||0;msg+=`${s}: ${total} | ${total>0?((wins/total)*100).toFixed(0):"-"}% | $${pnl.toFixed(2)}\n`;}
     ctx.replyWithHTML(msg);
   });
+  bot.command("debug", async ctx=>{
+    const raw=await getMarkets(50,0);
+    if(!raw.length){ctx.reply("No markets from API");return;}
+    const hasWh=stmt.whalesCount.get()?.c>0;
+    const viable=raw.map(normalizeMarket).filter(m=>{
+      if(BLOCKED_TYPES.has(m._type)) return false;
+      if(m._yesPrice<=G.FLOOR||m._yesPrice>=G.CEIL) return false;
+      if(m._liq<G.MIN_LIQ) return false;
+      if(!m._endDate) return true;
+      const d=(new Date(m._endDate)-new Date())/86400000;
+      return d>=G.MIN_DAYS&&d<=G.MAX_DAYS;
+    }).slice(0,5);
+    let msg=`<b>Debug Scan</b>
+${viable.length} viable
+
+`;
+    for(const m of viable){
+      const specSig=await fetchSpecializedSignal(m);
+      const wa=await getWhaleActivity(m);
+      const whaleRes=agentWhaleCopy(wa,hasWh);
+      const specRes=agentSpecialized(specSig);
+      const newsRes=agentNewsCoverage(m,specSig);
+      const techRes=agentTechnical(m);
+      const mathRes=agentResolutionMath(m);
+      const tgB=getTelegramBoost(m.id||m.conditionId,m.question);
+      const tgC=Math.max(tgB.whale,tgB.news);
+      const sentRes={vote:tgC>0.3||specSig.confidence>0.45,confidence:tgC||specSig.confidence*0.6||0.3};
+      const stRes=agentStealth(wa,specRes.vote,newsRes.vote,hasWh);
+      const all=[{...whaleRes,name:"Wh"},{...stRes,name:"St"},{...specRes,name:"Sp"},{...newsRes,name:"Ne"},{...techRes,name:"Te"},{...mathRes,name:"Ma"},{...sentRes,name:"TG"}];
+      const active=all.filter(a=>!a.inactive);
+      const votes=active.filter(a=>a.vote).map(a=>a.name);
+      const con=runConsensus(all,whaleRes,stRes,hasWh);
+      const guard=con.action==="ENTER"?checkGuardrails(m,con,specSig):{ok:null};
+      const p=m._yesPrice||extractPrice(m);
+      const d=m._endDate?(new Date(m._endDate)-new Date())/86400000:999;
+      msg+=`<b>${m._type} ${(p*100).toFixed(0)}% ${d.toFixed(1)}d</b>
+`;
+      msg+=`Votes:${votes.join(",")||"NONE"} [${votes.length}/${active.length}] → ${con.action}
+`;
+      msg+=`Spec:${(specSig.confidence*100).toFixed(0)}% Tech:${techRes.vote?"Y":"N"}(${(techRes.confidence*100).toFixed(0)}%) Math:${mathRes.vote?"Y":"N"}(${(mathRes.confidence*100).toFixed(0)}%)
+`;
+      if(guard.ok===false) msg+=`BLOCKED: ${guard.reason}
+`;
+      msg+=`${m.question?.slice(0,50)}
+
+`;
+      await delay(300);
+    }
+    ctx.replyWithHTML(msg);
+  });
+
   bot.command("pause",ctx=>{setState("paused",true);ctx.reply("Paused.");});
   bot.command("resume",ctx=>{setState("paused",false);ctx.reply("Resumed.");});
   bot.command("status",ctx=>{
