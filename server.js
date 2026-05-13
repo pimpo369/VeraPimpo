@@ -528,14 +528,27 @@ async function fetchEconomicSignal(market) {
 async function fetchSpecializedSignal(market) {
   const mtype=market._type||classifyMarket(market.question);
   try {
+    let result;
     switch(mtype){
-      case "crypto":    return {...(await fetchCryptoSignal(market)),    type:"crypto"};
-      case "commodity": return {...(await fetchCommoditySignal(market)),  type:"commodity"};
-      case "political": return {...(await fetchPoliticalSignal(market)),  type:"political"};
-      case "sports":    return {...(await fetchSportsSignal(market)),     type:"sports"};
-      case "economic":  return {...(await fetchEconomicSignal(market)),   type:"economic"};
-      default:          return {signal:false,confidence:0,detail:"No specialized signal for this type",type:mtype};
+      case "crypto":    result={...(await fetchCryptoSignal(market)),    type:"crypto"};    break;
+      case "commodity": result={...(await fetchCommoditySignal(market)),  type:"commodity"}; break;
+      case "political": result={...(await fetchPoliticalSignal(market)),  type:"political"}; break;
+      case "sports":    result={...(await fetchSportsSignal(market)),     type:"sports"};    break;
+      case "economic":  result={...(await fetchEconomicSignal(market)),   type:"economic"};  break;
+      default:          result={signal:false,confidence:0,detail:"No specialized signal",type:mtype}; break;
     }
+    // Always save a summary article for this market scan so news feed is populated
+    if(result.detail&&result.detail.length>5){
+      const headline=`[${mtype.toUpperCase()}] ${market.question.slice(0,80)} — ${result.detail.slice(0,100)}`;
+      if(!stmt.newsExists.get("VeraPimpo Signal",headline)){
+        try{
+          stmt.insertNews.run("VeraPimpo Signal",headline,result.detail,
+            `https://polymarket.com/event/${market.id}`,"",new Date().toUTCString(),
+            market.id,market.question,mtype,"targeted","monitored");
+        }catch{}
+      }
+    }
+    return result;
   } catch(e) { return {signal:false,confidence:0,detail:`Signal error: ${e.message}`,type:mtype}; }
 }
 
@@ -569,6 +582,15 @@ async function refreshNewsCache() {
   }
   newsCache=items; newsCacheAt=Date.now();
   console.log("News cache:",items.length,"articles");
+
+  // Save ALL articles to DB proactively — news feed shows them regardless of market match
+  for(const item of items){
+    if(!stmt.newsExists.get(item.source,item.title)){
+      try{
+        stmt.insertNews.run(item.source,item.title,item.desc,item.link,item.imgUrl,item.pubDate,null,null,"other","rss","monitored");
+      }catch{}
+    }
+  }
 }
 
 function matchNewsCache(market) {
@@ -923,6 +945,12 @@ async function runScan() {
   }
 
   let traded=0,scanned=0,blocked={};
+
+  // Populate news for ALL viable markets, including those that won't trade
+  for(const market of viable){
+    try{ await fetchSpecializedSignal({...market}); } catch{}
+    await delay(200);
+  }
 
   for(const market of viable){
     if(getOpenTrades().length>=G.MAX_POSITIONS) break;
