@@ -79,9 +79,19 @@ function classifyMarket(question) {
   if (["gold","silver","oil","crude","commodity","metal","xau"].some(w=>q.includes(w))) return "commodity";
   if (["fed","federal reserve","interest rate","gdp","inflation","cpi","unemployment","earnings","revenue","ipo","merger","acquisition","nasdaq","s&p","dow"].some(w=>q.includes(w))) return "economic";
   if (["election","president","senate","congress","vote","democrat","republican","candidate","primary","governor","mayor","parliament","minister","referendum","ballot","poll"].some(w=>q.includes(w))) return "political";
-  if (["nfl","nba","mlb","nhl","soccer","football","basketball","baseball","tennis","ufc","mma","fight","championship","super bowl","world cup","playoffs","league","series","match","tournament","game","score","team","win","defeat"].some(w=>q.includes(w))) return "sports";
   if (["counter-strike","cs2","csgo","dota","valorant","league of legends","overwatch","esport","gaming"].some(w=>q.includes(w))) return "esports";
   if (["oscar","grammy","emmy","award","box office","streaming","movie","album","artist","billboard","chart"].some(w=>q.includes(w))) return "entertainment";
+  // Sports — comprehensive: includes soccer/draw markers, league names, sport types
+  if ([
+    "nfl","nba","mlb","nhl","soccer","football","basketball","baseball","tennis","ufc","mma","fight",
+    "championship","super bowl","world cup","playoffs","series","tournament","score","defeat",
+    "draw","penalty","vs.","v.s.","premier league","bundesliga","serie a","ligue 1","la liga",
+    "champions league","europa league","conference league","mls","bundesliga",
+    " fc "," sk "," cf "," ac "," afc "," sc "," if "," bk ",
+    "match","fixture","kickoff","kick-off","halftime","full time","overtime","innings",
+    "quarterback","touchdown","goal","hat trick","hat-trick","red card","yellow card",
+    "spread","over/under","o/u","moneyline","handicap"
+  ].some(w=>q.includes(w))) return "sports";
   return "other";
 }
 
@@ -552,12 +562,15 @@ async function fetchSpecializedSignal(market) {
       case "economic":  result={...(await fetchEconomicSignal(market)),   type:"economic"};  break;
       default:          result={signal:false,confidence:0,detail:"No specialized signal",type:mtype}; break;
     }
-    // Always save a summary article for this market scan so news feed is populated
+    // Save a signal summary article once per market per day (dedup by market_id+date)
     if(result.detail&&result.detail.length>5){
-      const headline=`[${mtype.toUpperCase()}] ${market.question.slice(0,80)} — ${result.detail.slice(0,100)}`;
-      if(!stmt.newsExists.get("VeraPimpo Signal",headline)){
+      const today=new Date().toISOString().slice(0,10);
+      const dedupKey=`signal_${market.id}_${today}`;
+      if(!stmt.newsExists.get("VeraPimpo Signal",dedupKey)){
+        const headline=`[${mtype.toUpperCase()}] ${(market.question||"").slice(0,80)}`;
         try{
-          stmt.insertNews.run("VeraPimpo Signal",headline,result.detail,
+          stmt.insertNews.run("VeraPimpo Signal",dedupKey,
+            `${headline} — ${result.detail}`,
             `https://polymarket.com/event/${market.id}`,"",new Date().toUTCString(),
             market.id,market.question,mtype,"targeted","monitored");
         }catch{}
@@ -673,12 +686,13 @@ function agentTechnical(market) {
   if(!price||price<=0) return {vote:false,confidence:0,detail:"No price"};
   const momentum=vol24>0&&vol>0?vol24/(vol/30):0;
   // In v3: sweet spot is 20-55%, not 15-85%
-  const inSweetSpot=price>=0.22&&price<=0.58;
-  const goodMomentum=momentum>1.2;
-  const goodLiq=liq>=G.MIN_LIQ;
-  const goodUpside=(1-price)/price>0.3; // at least 30% upside to 100%
-  const score=[inSweetSpot,goodMomentum,goodLiq,goodUpside].filter(Boolean).length/4;
-  return {vote:score>=0.6,confidence:score,price,detail:`${(price*100).toFixed(1)}% | Liq $${liq.toLocaleString()} | Mom ${momentum.toFixed(2)}x | Upside ${((1-price)/price*100).toFixed(0)}%`};
+  const inRange    = price>=G.FLOOR && price<=G.CEIL;
+  const goodMom    = momentum>1.0;         // lowered — some markets have thin 24h data
+  const goodLiq    = liq>=G.MIN_LIQ;
+  const goodUpside = (1-price)/price>0.25; // at least 25% upside to 100%
+  const score=[inRange,goodMom,goodLiq,goodUpside].filter(Boolean).length/4;
+  return {vote:score>=0.5,confidence:score,price,
+    detail:`${(price*100).toFixed(1)}% | Liq $${liq.toLocaleString()} | Mom ${momentum.toFixed(2)}x | Upside ${((1-price)/price*100).toFixed(0)}%`};
 }
 
 // ── AGENT 6: RESOLUTION MATH ─────────────────────────────
@@ -689,13 +703,14 @@ function agentResolutionMath(market) {
   const vol=parseFloat(market.volume||0);
   if(daysLeft<0)                  return {vote:false,confidence:0,detail:"Resolved"};
   if(daysLeft<G.BLACKOUT_HRS/24)  return {vote:false,confidence:0,detail:"Blackout"};
-  // v3: sweet spot 1-14 days
-  const inWindow=daysLeft>=G.MIN_DAYS&&daysLeft<=G.MAX_DAYS;
-  const goodPrice=price>=0.20&&price<=0.60;
-  const hasEdge=price<0.5&&(0.75-price)/price>G.MIN_EDGE;
-  const lowEfficiency=vol<100000;
-  const score=[inWindow,goodPrice,hasEdge,lowEfficiency,daysLeft>G.BLACKOUT_HRS/24].filter(Boolean).length/5;
-  return {vote:score>=0.6,confidence:score,daysLeft:+daysLeft.toFixed(1),detail:`${daysLeft.toFixed(1)}d left | ${(price*100).toFixed(1)}% | $${vol.toLocaleString()} vol`};
+  const inWindow  = daysLeft>=G.MIN_DAYS && daysLeft<=G.MAX_DAYS;
+  const goodPrice = price>=G.FLOOR && price<=G.CEIL;       // use live guardrails
+  const hasEdge   = Math.abs(price-0.5)*2 >= G.MIN_EDGE;  // simple edge: distance from 50%
+  const okVolume  = vol < 200000;                          // not over-traded
+  const notBlack  = daysLeft > G.BLACKOUT_HRS/24;
+  const score=[inWindow,goodPrice,hasEdge,okVolume,notBlack].filter(Boolean).length/5;
+  return {vote:score>=0.5,confidence:score,daysLeft:+daysLeft.toFixed(1),
+    detail:`${daysLeft.toFixed(1)}d left | ${(price*100).toFixed(1)}% | $${vol.toLocaleString()} vol`};
 }
 
 // ── CONSENSUS ENGINE v3 ───────────────────────────────────
@@ -736,7 +751,7 @@ function checkGuardrails(market, consensus, specializedResult) {
   if(open.find(t=>t.market_id===market.id))       return {ok:false,reason:"Already open"};
   if((getState("daily_trades")||0)>=G.MAX_DAILY)  return {ok:false,reason:"Daily limit"};
   if(BLOCKED_TYPES.has(mtype))                    return {ok:false,reason:`${mtype} blocked — no signal advantage`};
-  if(price>=G.CEIL||price<=G.FLOOR)               return {ok:false,reason:`Price ${(price*100).toFixed(0)}% out of 20-60% range`};
+  if(price>=G.CEIL||price<=G.FLOOR)               return {ok:false,reason:`Price ${(price*100).toFixed(0)}% outside ${(G.FLOOR*100).toFixed(0)}-${(G.CEIL*100).toFixed(0)}% range`};
   if(liq<G.MIN_LIQ)                               return {ok:false,reason:`Liquidity $${liq.toLocaleString()} < $${G.MIN_LIQ.toLocaleString()}`};
   if(hoursLeft<G.BLACKOUT_HRS)                    return {ok:false,reason:"Blackout window"};
   if(daysLeft<G.MIN_DAYS)                         return {ok:false,reason:"Resolves too soon"};
@@ -792,7 +807,14 @@ async function executePaperTrade(market, consensus, agents, guard, specializedRe
   const shares=+(size/price).toFixed(4);
   const stopPrice=+(Math.max(G.FLOOR,price*(1-G.STOP_PCT))).toFixed(4);
   const trailingStop=stopPrice;
-  const target=+(Math.min(0.92,price+(1-price)*G.EXIT_TARGET)).toFixed(4);
+  // Target is time-aware and market-type-aware
+  // Short-resolution (<72h): target 50-65% — market won't drift far from current price
+  // Medium (1-7 days): target 70-80%
+  // Long (>7 days): target up to EXIT_TARGET
+  const endDate=market._endDate?new Date(market._endDate):null;
+  const hoursLeft=endDate?(endDate-new Date())/3600000:999;
+  const targetCap = hoursLeft<24?0.62:hoursLeft<72?0.72:hoursLeft<168?0.82:0.92;
+  const target=+(Math.min(targetCap, price+(1-price)*(hoursLeft<72?0.45:hoursLeft<168?0.65:G.EXIT_TARGET))).toFixed(4);
   const fired=agents.filter(a=>a.vote&&!a.inactive).map(a=>a.name).join(",");
   const mtype=market._type||classifyMarket(market.question);
   const sigDetail=specializedResult?.detail||"";
@@ -959,7 +981,7 @@ async function runScan() {
     return days>=G.MIN_DAYS&&days<=G.MAX_DAYS;
   }).slice(0,20);
 
-  console.log(`${viable.length} viable (from ${raw.length}, blocked esports/entertainment, 20-60% range, 1-14 days, $25k+ liq)`);
+  console.log(`${viable.length} viable from ${raw.length} (${G.FLOOR*100}-${G.CEIL*100}% | ${G.MIN_DAYS}-${G.MAX_DAYS}d | $${(G.MIN_LIQ/1000).toFixed(0)}k+ liq | blocked: esports/entertainment)`);
 
   for(const m of viable){
     try{stmt.upsertMkt.run(m.id||m.conditionId,m.question,m.category||"general",m._type,m._yesPrice,1-m._yesPrice,parseFloat(m.volume||0),m._endDate||null,Math.round(Math.abs(m._yesPrice-0.5)*200+Math.min(m._liq/100000,0.3)*30),`type:${m._type}`);}catch{}
@@ -967,28 +989,33 @@ async function runScan() {
 
   let traded=0,scanned=0,blocked={};
 
-  // Populate news for ALL viable markets, including those that won't trade
+  // Pre-fetch ALL specialized signals once — populates news feed AND caches for trading loop
+  const specSigCache = new Map();
   for(const market of viable){
-    try{ await fetchSpecializedSignal({...market}); } catch{}
-    await delay(200);
+    try{
+      const sig = await fetchSpecializedSignal(market);
+      specSigCache.set(market.id, sig);
+    } catch{}
+    await delay(150);
   }
 
   for(const market of viable){
     if(getOpenTrades().length>=G.MAX_POSITIONS) break;
     try{
       scanned++;
-      // Fetch all signals in parallel
-      const [wa,specSig]=await Promise.all([
-        getWhaleActivity(market),
-        fetchSpecializedSignal(market),
-      ]);
+      // Use cached signal — no double API call
+      const [wa] = await Promise.all([getWhaleActivity(market)]);
+      const specSig = specSigCache.get(market.id) || {signal:false,confidence:0,detail:"No signal"};
 
       const whaleRes   = agentWhaleCopy(wa, hasConfirmedWhales);
       const specRes    = agentSpecialized(specSig);
       const newsRes    = agentNewsCoverage(market, specSig);
       const techRes    = agentTechnical(market);
       const mathRes    = agentResolutionMath(market);
-      const sentRes    = {vote:specSig.signal&&specSig.confidence>0.5, confidence:specSig.confidence||0.4, detail:"From specialized signal"};
+      // Agent 7: Telegram Signal — based on TG channel messages matching this market
+      const tgBoost=getTelegramBoost(market.id,market.question);
+      const tgConf=Math.max(tgBoost.whale,tgBoost.news);
+      const sentRes = {vote:tgConf>0.3||specSig.confidence>0.45, confidence:Math.max(tgConf,specSig.confidence*0.6)||0.3, detail:`TG boost: ${(tgConf*100).toFixed(0)}% | Spec: ${(specSig.confidence*100).toFixed(0)}%`};
       const stealthRes = agentStealth(wa, specRes.vote, newsRes.vote, hasConfirmedWhales);
 
       const allAgents=[
@@ -1099,7 +1126,7 @@ if(bot){
   bot.command("resume",ctx=>{setState("paused",false);ctx.reply("Resumed.");});
   bot.command("status",ctx=>{
     const open=getOpenTrades(); const conf=stmt.whalesCount.get()?.c||0;
-    ctx.replyWithHTML(`<b>VeraPimpo v3 Status</b>\n\nMode: ${getState("paused")?"PAUSED":"ACTIVE"} | Paper: YES\nBudget: $${G.BUDGET} | Halt: $${G.LOSS_HALT}\nOpen: ${open.length}/${G.MAX_POSITIONS} | $${getDeployed().toFixed(2)}\nToday: ${getState("daily_trades")||0}/${G.MAX_DAILY}\nWhales confirmed: ${conf}\nEntry range: 20-60% | Min edge: 8%\nLiquidity floor: $25k | Window: 1-14 days\nBlocked: esports, entertainment`);
+    ctx.replyWithHTML(`<b>VeraPimpo v3 Status</b>\n\nMode: ${getState("paused")?"PAUSED":"ACTIVE"} | Paper: YES\nBudget: $${G.BUDGET} | Halt: $${G.LOSS_HALT}\nOpen: ${open.length}/${G.MAX_POSITIONS} | $${getDeployed().toFixed(2)}\nToday: ${getState("daily_trades")||0}/${G.MAX_DAILY}\nWhales confirmed: ${conf}\nEntry: ${G.FLOOR*100}-${G.CEIL*100}% | Edge: ${G.MIN_EDGE*100}%+ | Liq: $${G.MIN_LIQ/1000}k+\nWindow: ${G.MIN_DAYS}-${G.MAX_DAYS} days | Blocked: esports, entertainment`);
   });
   bot.command("live",ctx=>ctx.replyWithHTML(`<b>Going Live</b>\n\n1. Create Polygon wallet\n2. Fund USDC via Rain exchange\n3. Add WALLET_PRIVATE_KEY to Railway\n4. Set PAPER=false in server.js\n5. Redeploy`));
   bot.help(ctx=>ctx.replyWithHTML(`/portfolio /scan /sync /positions /history /whales /whalesscan /markets /news /strategy /pause /resume /status /live`));
@@ -1110,6 +1137,8 @@ let scanning=false;
 setInterval(async()=>{if(scanning||getState("paused"))return;scanning=true;try{await runScan();}finally{scanning=false;}},480000);
 setInterval(async()=>{if(!getState("paused"))await monitorPositions();},180000);
 setInterval(saveFullBackup,600000);
+// Dedupe news every hour — prevents accumulation of duplicates during runtime
+setInterval(()=>{try{db.exec("DELETE FROM news_items WHERE id NOT IN (SELECT MIN(id) FROM news_items GROUP BY source,headline)");}catch{}},3600000);
 cron.schedule("0 3 * * *",refreshWhales,{timezone:"UTC"});
 cron.schedule("0 6 * * *",async()=>{
   const open=getOpenTrades(); const perf=stmt.catPerf.all();
