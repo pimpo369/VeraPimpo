@@ -582,7 +582,7 @@
     <div class="login-title">Enter your access password to continue</div>
     <div style="position:relative">
       <input class="login-input" type="password" id="pass-input" placeholder="Password" autocomplete="current-password" style="padding-right:48px;margin-bottom:0"/>
-      <button onclick="togglePass()" id="eye-btn" style="position:absolute;right:14px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--gray);font-size:16px;padding:4px;line-height:1" title="Show/hide password">
+      <button type="button" id="eye-btn" style="position:absolute;right:14px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--gray);font-size:16px;padding:4px;line-height:1" title="Show/hide password">
         <svg id="eye-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
       </button>
     </div>
@@ -767,84 +767,101 @@
 const API = window.location.origin;
 let password = "";
 
-// ── TOGGLE PASSWORD VISIBILITY ────────────────────────
+// ── AUTH — clean bulletproof version ──────────────────
+const EYE_OPEN  = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+const EYE_SHUT  = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>';
+
 function togglePass() {
-  const input = document.getElementById("pass-input");
-  const icon  = document.getElementById("eye-icon");
-  if (input.type === "password") {
-    input.type = "text";
-    icon.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>';
-  } else {
-    input.type = "password";
-    icon.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
-  }
+  try {
+    const inp  = document.getElementById("pass-input");
+    const icon = document.getElementById("eye-icon");
+    if (!inp || !icon) return;
+    if (inp.type === "password") {
+      inp.type = "text";
+      icon.innerHTML = EYE_SHUT;
+    } else {
+      inp.type = "password";
+      icon.innerHTML = EYE_OPEN;
+    }
+  } catch(e) { console.error("togglePass:", e); }
 }
 
-// ── AUTH ───────────────────────────────────────────────
-async function attemptLogin(pass, remember) {
+function showLoginError(msg) {
+  const el = document.getElementById("login-error");
+  if (el) el.textContent = msg;
+}
+
+async function doLogin(pass, remember) {
+  if (!pass || !pass.trim()) { showLoginError("Enter your password"); return false; }
   try {
-    const verify = await fetch(`${API}/api/overview?password=${pass}`);
-    if (verify.ok) {
+    const r = await fetch(API + "/api/overview?password=" + encodeURIComponent(pass));
+    if (r.ok) {
       password = pass;
-      // sessionStorage — active session only, clears on tab close
-      sessionStorage.setItem("vp_session", pass);
-      // localStorage — only if remember me is checked
+      try { sessionStorage.setItem("vp_session", pass); } catch {}
       if (remember) {
-        const expiry = Date.now() + 7 * 24 * 3600 * 1000; // 7 days
-        localStorage.setItem("vp_pass", JSON.stringify({ pass, expiry }));
+        try { localStorage.setItem("vp_pass", JSON.stringify({pass, expiry: Date.now() + 7*24*3600*1000})); } catch {}
       } else {
-        localStorage.removeItem("vp_pass");
+        try { localStorage.removeItem("vp_pass"); } catch {}
       }
       document.getElementById("login-screen").style.display = "none";
       document.getElementById("app").classList.add("visible");
-      loadOverview();
-      loadTicker();
+      try { loadOverview(); } catch {}
+      try { loadTicker(); } catch {}
       return true;
     } else {
-      document.getElementById("login-error").textContent = "Incorrect password";
+      showLoginError("Incorrect password");
       return false;
     }
-  } catch {
-    document.getElementById("login-error").textContent = "Cannot connect to server";
+  } catch(e) {
+    showLoginError("Cannot reach server — check Railway is running");
+    console.error("Login error:", e);
     return false;
   }
 }
 
-document.getElementById("login-btn").onclick = () => {
-  const pass = document.getElementById("pass-input").value;
-  const remember = document.getElementById("remember-me").checked;
-  attemptLogin(pass, remember);
-};
+// Wire up button and enter key after DOM loads
+window.addEventListener("DOMContentLoaded", function() {
+  const btn  = document.getElementById("login-btn");
+  const inp  = document.getElementById("pass-input");
+  const eyeBtn = document.getElementById("eye-btn");
 
-document.getElementById("pass-input").addEventListener("keydown", e => {
-  if (e.key === "Enter") document.getElementById("login-btn").click();
-});
+  if (btn) btn.addEventListener("click", function() {
+    const pass = inp ? inp.value : "";
+    const rem  = document.getElementById("remember-me");
+    doLogin(pass, rem ? rem.checked : false);
+  });
 
-// Auto-login: check sessionStorage first (tab still open), then localStorage (remember me)
-window.addEventListener("load", async () => {
-  // 1. Session still active in this browser session
-  const session = sessionStorage.getItem("vp_session");
-  if (session) {
-    const ok = await attemptLogin(session, false);
-    if (ok) return;
-    sessionStorage.removeItem("vp_session");
-  }
-  // 2. Remember me — check expiry
-  const saved = localStorage.getItem("vp_pass");
-  if (saved) {
+  if (inp) inp.addEventListener("keydown", function(e) {
+    if (e.key === "Enter") btn && btn.click();
+  });
+
+  if (eyeBtn) eyeBtn.addEventListener("click", function(e) {
+    e.preventDefault();
+    togglePass();
+  });
+
+  // Auto-login from saved session
+  (async function() {
     try {
-      const { pass, expiry } = JSON.parse(saved);
-      if (Date.now() < expiry) {
-        document.getElementById("pass-input").value = pass;
-        document.getElementById("remember-me").checked = true;
-        const ok = await attemptLogin(pass, true);
-        if (!ok) { localStorage.removeItem("vp_pass"); document.getElementById("pass-input").value = ""; }
-      } else {
-        // Expired — clear it
-        localStorage.removeItem("vp_pass");
+      const session = sessionStorage.getItem("vp_session");
+      if (session) { const ok = await doLogin(session, false); if (ok) return; sessionStorage.removeItem("vp_session"); }
+    } catch {}
+    try {
+      const saved = localStorage.getItem("vp_pass");
+      if (saved) {
+        const data = JSON.parse(saved);
+        if (data && data.pass && Date.now() < data.expiry) {
+          if (inp) inp.value = data.pass;
+          const rem = document.getElementById("remember-me");
+          if (rem) rem.checked = true;
+          const ok = await doLogin(data.pass, true);
+          if (!ok) { try { localStorage.removeItem("vp_pass"); } catch {} if (inp) inp.value = ""; }
+        } else {
+          try { localStorage.removeItem("vp_pass"); } catch {}
+        }
       }
-    } catch { localStorage.removeItem("vp_pass"); }
-  }
+    } catch {}
+  })();
 });
 
 // ── API HELPER ─────────────────────────────────────────
@@ -1418,7 +1435,7 @@ async function loadNews() {
       </div>`;
       // Auto-trigger scan and reload after 3 minutes
       try {
-        await fetch(\`\${API}/api/scan\`, {method:"POST", headers:{"x-dashboard-password":password}});
+        await fetch(API + "/api/scan", {method:"POST", headers:{"x-dashboard-password":password}});
         setTimeout(async () => { await loadNews(); }, 180000);
         setTimeout(async () => { await loadNews(); }, 60000);
       } catch {}
