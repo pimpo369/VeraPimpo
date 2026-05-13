@@ -23,6 +23,15 @@ const cfg = {
   dashPass : process.env.DASHBOARD_PASSWORD        || "verapimpo2026",
 };
 
+// Startup validation — fail fast with clear error
+const REQUIRED_VARS = ["VERAPIMPO_TELEGRAM_TOKEN","VERAPIMPO_CHAT_ID","DASHBOARD_PASSWORD"];
+const missing = REQUIRED_VARS.filter(v => !process.env[v]);
+if (missing.length) {
+  console.error("\n MISSING REQUIRED ENV VARIABLES:\n  " + missing.join("\n  "));
+  console.error("\n Add these to Railway → Variables tab then redeploy.\n");
+  process.exit(1);
+}
+
 const TG_CHANNELS = [
   { username:"Whale200",  type:"whale", label:"Whale200"  },
   { username:"burjbnews", type:"news",  label:"Burj News" },
@@ -112,6 +121,21 @@ const setState = (k,v)      => stmt.setState.run(k,JSON.stringify(v));
 if(getState("paused")===null)       setState("paused",false);
 if(getState("daily_trades")===null) setState("daily_trades",0);
 if(!getState("trade_date"))         setState("trade_date","");
+
+// Indexes for fast queries
+try {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_trades_status    ON paper_trades(status);
+    CREATE INDEX IF NOT EXISTS idx_trades_opened    ON paper_trades(opened_at);
+    CREATE INDEX IF NOT EXISTS idx_trades_market    ON paper_trades(market_id);
+    CREATE INDEX IF NOT EXISTS idx_news_fetched     ON news_items(fetched_at);
+    CREATE INDEX IF NOT EXISTS idx_news_market      ON news_items(market_id);
+    CREATE INDEX IF NOT EXISTS idx_alerts_created   ON alerts(created_at);
+    CREATE INDEX IF NOT EXISTS idx_tg_fetched       ON tg_messages(fetched_at);
+    CREATE INDEX IF NOT EXISTS idx_whales_rank      ON whales(rank);
+    CREATE INDEX IF NOT EXISTS idx_markets_scanned  ON markets(last_scanned);
+  `);
+} catch {}
 
 // Dedupe news on boot
 try { db.exec("DELETE FROM news_items WHERE id NOT IN (SELECT MIN(id) FROM news_items GROUP BY source,headline)"); } catch {}
@@ -735,11 +759,74 @@ if (bot) {
 
 // ── REST API ──────────────────────────────────────────────
 const app=express();
-app.use(cors()); app.use(express.json());
-app.use("/api",(req,res,next)=>{if((req.headers["x-dashboard-password"]||req.query.password)!==cfg.dashPass)return res.status(401).json({error:"Unauthorized"});next();});
+
+// CORS — lock to Railway domain + localhost only
+const ALLOWED_ORIGINS = [
+  /\.railway\.app$/,
+  /^http:\/\/localhost/,
+  /^http:\/\/127\.0\.0\.1/,
+];
+app.use(cors({
+  origin: (origin, cb) => {
+    // Allow requests with no origin (mobile apps, curl, Telegram webhooks)
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.some(r => r.test(origin))) return cb(null, true);
+    cb(new Error("CORS: origin not allowed"));
+  },
+  methods: ["GET","POST","OPTIONS"],
+  allowedHeaders: ["Content-Type","x-dashboard-password"],
+}));
+
+app.use(express.json());
+
+// Rate limiter — in-memory, per IP
+const rateLimits = new Map();
+function rateLimit(maxPerMin=30) {
+  return (req, res, next) => {
+    const ip  = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket?.remoteAddress || "unknown";
+    const now = Date.now();
+    const key = `${ip}`;
+    const rec = rateLimits.get(key) || { count:0, resetAt: now + 60000 };
+    if (now > rec.resetAt) { rec.count = 0; rec.resetAt = now + 60000; }
+    rec.count++;
+    rateLimits.set(key, rec);
+    if (rec.count > maxPerMin) {
+      return res.status(429).json({ error:"Too many requests — slow down" });
+    }
+    next();
+  };
+}
+// Clean up rate limit map every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [k,v] of rateLimits) { if (now > v.resetAt + 60000) rateLimits.delete(k); }
+}, 300000);
+
+// Request logging
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on("finish", () => {
+    const ms  = Date.now() - start;
+    const log = `${req.method} ${req.path} ${res.statusCode} ${ms}ms`;
+    if (res.statusCode >= 400) console.error("HTTP:", log);
+    else if (ms > 2000)        console.warn("SLOW:", log);
+  });
+  next();
+});
+
+// Auth middleware
+app.use("/api",(req,res,next)=>{
+  if((req.headers["x-dashboard-password"]||req.query.password)!==cfg.dashPass)
+    return res.status(401).json({error:"Unauthorized"});
+  next();
+});
+
+// Apply rate limit to expensive endpoints
+const scanLimit  = rateLimit(3);   // max 3 manual scans/min
+const apiLimit   = rateLimit(60);  // max 60 API reads/min
 app.get("/api/overview",(_,res)=>{const open=getOpenTrades(),total=stmt.closedCount.get()?.c||0,wins=stmt.winsCount.get()?.c||0,today=db.prepare("SELECT COUNT(*) as c FROM paper_trades WHERE date(opened_at)=date('now')").get()?.c||0;res.json({budget:G.BUDGET,deployed:getDeployed(),available:G.BUDGET-getDeployed(),pnl:getState("total_pnl")||0,loss:getState("total_loss")||0,lossHalt:G.LOSS_HALT,openCount:open.length,maxPositions:G.MAX_POSITIONS,winRate:total>0?wins/total:0,totalTrades:total,todayTrades:today,maxDailyTrades:G.MAX_DAILY,paper:PAPER,paused:getState("paused")||false});});
 app.get("/api/positions",(_,res)=>res.json(stmt.openTrades.all()));
-app.get("/api/history",(req,res)=>res.json(db.prepare("SELECT * FROM paper_trades WHERE status='closed' ORDER BY closed_at DESC LIMIT ?").all(parseInt(req.query.limit)||50)));
+app.get("/api/history",(req,res)=>{ const limit=Math.min(parseInt(req.query.limit)||50,200); const offset=parseInt(req.query.offset)||0; res.json(db.prepare("SELECT * FROM paper_trades WHERE status='closed' ORDER BY closed_at DESC LIMIT ? OFFSET ?").all(limit,offset)); });
 app.get("/api/whales",(_,res)=>res.json(db.prepare("SELECT * FROM whales ORDER BY rank").all()));
 app.get("/api/whale-trades",(_,res)=>res.json(db.prepare("SELECT * FROM whale_trades ORDER BY timestamp DESC LIMIT 50").all()));
 app.get("/api/markets",(_,res)=>res.json(stmt.cachedMkts.all()));
@@ -748,13 +835,32 @@ app.get("/api/tg-messages",(_,res)=>res.json(stmt.tgRecent.all()));
 app.get("/api/strategy",(_,res)=>{const agents=["Whale","Stealth","News","Sentiment","Technical","ResolutionMath"];res.json(agents.map(s=>({name:s,trades:db.prepare("SELECT COUNT(*) as c FROM paper_trades WHERE status='closed' AND agents_fired LIKE ?").get(`%${s}%`)?.c||0,wins:db.prepare("SELECT COUNT(*) as c FROM paper_trades WHERE status='closed' AND pnl>0 AND agents_fired LIKE ?").get(`%${s}%`)?.c||0,pnl:db.prepare("SELECT SUM(pnl) as p FROM paper_trades WHERE status='closed' AND agents_fired LIKE ?").get(`%${s}%`)?.p||0,avg_pnl:db.prepare("SELECT AVG(pnl) as p FROM paper_trades WHERE status='closed' AND agents_fired LIKE ?").get(`%${s}%`)?.p||0})));});
 app.get("/api/alerts",(_,res)=>res.json(db.prepare("SELECT * FROM alerts ORDER BY created_at DESC LIMIT 100").all()));
 app.get("/api/scan-log",(_,res)=>res.json(db.prepare("SELECT * FROM paper_trades ORDER BY opened_at DESC LIMIT 50").all()));
-app.post("/api/sync",(req,res)=>{const r=restorePositionsFromBackup();res.json({restored:r,open:getOpenTrades().length,deployed:getDeployed()});});
-app.post("/api/scan",(_,res)=>{res.json({started:true});runScan();});
-app.post("/api/whalesscan",(_,res)=>{res.json({started:true});refreshWhales();});
+app.post("/api/sync", apiLimit, (req,res)=>{const r=restorePositionsFromBackup();res.json({restored:r,open:getOpenTrades().length,deployed:getDeployed()});});
+app.post("/api/scan", scanLimit, (_,res)=>{res.json({started:true});runScan();});
+app.post("/api/whalesscan", scanLimit, (_,res)=>{res.json({started:true});refreshWhales();});
 app.post("/api/pause",(_,res)=>{setState("paused",true);res.json({paused:true});});
 app.post("/api/resume",(_,res)=>{setState("paused",false);res.json({paused:false});});
 app.get("/",(req,res)=>{try{res.setHeader("Content-Type","text/html");res.send(fs.readFileSync(path.join(__dirname,"dashboard.html"),"utf8"));}catch{res.status(500).send("Upload dashboard.html to the repo root.");}});
 app.get("/health",(_,res)=>res.json({status:"ok",paper:PAPER,version:"2.0.0"}));
+
+// Global error handler — catches unhandled Express errors
+app.use((err, req, res, next) => {
+  console.error("Express error:", err.message);
+  try { stmt.logAlert.run("SERVER_ERROR", err.message, ""); } catch {}
+  res.status(500).json({ error:"Internal server error" });
+});
+
+// Catch unhandled promise rejections — log but don't crash
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled rejection:", reason);
+  try { stmt.logAlert.run("UNHANDLED_REJECTION", String(reason), ""); } catch {}
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err.message);
+  try { stmt.logAlert.run("UNCAUGHT_EXCEPTION", err.message, ""); } catch {}
+  // Don't exit — let Railway restart if truly fatal
+});
+
 app.listen(3000,()=>console.log("VeraPimpo API on port 3000"));
 
 // ── SCHEDULES ─────────────────────────────────────────────
