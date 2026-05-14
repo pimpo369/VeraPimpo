@@ -262,59 +262,123 @@ if(getState("paused")===null)       setState("paused",false);
 if(getState("daily_trades")===null) setState("daily_trades",0);
 if(!getState("trade_date"))         setState("trade_date","");
 
-// ── POSITION BACKUP ───────────────────────────────────────
-const BACKUP = "./verapimpo_backup.json";
+// ── CLOUD BACKUP via JSONBin.io ────────────────────────────
+// Survives Railway redeploys — data stored externally, not on container filesystem
+// Setup: create free account at jsonbin.io, get API key, add JSONBIN_KEY to Railway vars
+// The bin ID is auto-created on first run and stored as JSONBIN_BIN_ID env var
 
-function saveFullBackup() {
+const JSONBIN_KEY  = process.env.JSONBIN_KEY   || "";
+const JSONBIN_BIN  = process.env.JSONBIN_BIN_ID|| "";
+const JSONBIN_BASE = "https://api.jsonbin.io/v3";
+
+let   backupBinId  = JSONBIN_BIN; // filled on first save if not set
+
+async function saveFullBackup() {
   try {
-    fs.writeFileSync(BACKUP, JSON.stringify({
+    const payload = {
       open_positions : stmt.openTrades.all(),
       closed_trades  : db.prepare("SELECT * FROM paper_trades WHERE status='closed' ORDER BY closed_at DESC LIMIT 500").all(),
       agent_state    : db.prepare("SELECT * FROM agent_state").all(),
       whales         : db.prepare("SELECT * FROM whales ORDER BY rank").all(),
       cat_perf       : db.prepare("SELECT * FROM category_performance").all(),
       saved_at       : new Date().toISOString(),
-    }));
-  } catch(e) { console.error("Backup:",e.message); }
+    };
+    const body = JSON.stringify(payload);
+
+    if (!JSONBIN_KEY) {
+      // Fallback to local file if no API key configured
+      fs.writeFileSync("./vp_backup.json", body);
+      return;
+    }
+
+    if (backupBinId) {
+      // Update existing bin
+      await fetch(`${JSONBIN_BASE}/b/${backupBinId}`, {
+        method:"PUT", headers:{"Content-Type":"application/json","X-Master-Key":JSONBIN_KEY,"X-Bin-Versioning":"false"},
+        body
+      });
+    } else {
+      // Create new bin on first run
+      const res  = await fetch(`${JSONBIN_BASE}/b`, {
+        method:"POST", headers:{"Content-Type":"application/json","X-Master-Key":JSONBIN_KEY,"X-Collection-Id":"","X-Bin-Name":"verapimpo","X-Bin-Private":"true"},
+        body
+      });
+      const data = await res.json();
+      backupBinId= data?.metadata?.id || "";
+      if (backupBinId) {
+        console.log(`Created JSONBin: ${backupBinId}`);
+        console.log(`Add to Railway vars: JSONBIN_BIN_ID=${backupBinId}`);
+        await tg(`<b>VeraPimpo Backup Created</b>\nAdd to Railway Variables:\n<code>JSONBIN_BIN_ID=${backupBinId}</code>`);
+      }
+    }
+  } catch(e) {
+    // Fallback to local file on API error
+    try { fs.writeFileSync("./vp_backup.json", JSON.stringify({
+      open_positions:stmt.openTrades.all(),closed_trades:db.prepare("SELECT * FROM paper_trades WHERE status='closed' ORDER BY closed_at DESC LIMIT 500").all(),agent_state:db.prepare("SELECT * FROM agent_state").all(),saved_at:new Date().toISOString()
+    })); } catch {}
+    console.error("Cloud backup failed, used local fallback:", e.message);
+  }
 }
 
 const savePositionBackup = saveFullBackup;
 
-function restoreFromBackup() {
+async function restoreFromBackup() {
+  let b = null;
+  // 1. Try cloud backup (JSONBin)
+  if (JSONBIN_KEY && backupBinId) {
+    try {
+      const res  = await fetch(`${JSONBIN_BASE}/b/${backupBinId}/latest`, {
+        headers:{"X-Master-Key":JSONBIN_KEY,"X-Bin-Meta":"false"}
+      });
+      if (res.ok) { b = await res.json(); console.log("Restored from JSONBin cloud backup"); }
+    } catch(e) { console.error("JSONBin read failed:", e.message); }
+  }
+  // 2. Fallback to local file if cloud failed or not configured
+  if (!b) {
+    const localFiles = ["./vp_backup.json","./verapimpo_backup.json","./positions_backup.json"];
+    for (const f of localFiles) {
+      if (fs.existsSync(f)) {
+        try { b = JSON.parse(fs.readFileSync(f,"utf8")); console.log(`Restored from local: ${f}`); break; }
+        catch {}
+      }
+    }
+  }
+  if (!b) { console.log("No backup found — fresh start"); return 0; }
+
+  let restored = 0;
   try {
-    if (!fs.existsSync(BACKUP)) { console.log("No backup found."); return 0; }
-    const b = JSON.parse(fs.readFileSync(BACKUP,"utf8"));
-    let restored = 0;
     if (b.agent_state?.length) {
       for (const s of b.agent_state) { if (!stmt.getState.get(s.key)) stmt.setState.run(s.key, s.value); }
     }
     if (b.closed_trades?.length) {
       const ins = db.prepare("INSERT OR IGNORE INTO paper_trades (id,market_id,market_question,category,market_type,side,entry_price,current_price,size,shares,stop_price,trailing_stop,target_price,agents_fired,layer,tier,signal_detail,status,pnl,pnl_pct,exit_reason,closes_at,opened_at,closed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
       for (const t of b.closed_trades) {
-        ins.run(t.id,t.market_id,t.market_question,t.category||"general",t.market_type||"other",t.side||"YES",t.entry_price,t.current_price||t.entry_price,t.size,t.shares,t.stop_price,t.trailing_stop||null,t.target_price,t.agents_fired,t.layer,t.tier,t.signal_detail||null,"closed",t.pnl||0,t.pnl_pct||0,t.exit_reason,t.closes_at,t.opened_at,t.closed_at);
+        try { ins.run(t.id,t.market_id,t.market_question,t.category||"general",t.market_type||"other",t.side||"YES",t.entry_price,t.current_price||t.entry_price,t.size,t.shares,t.stop_price,t.trailing_stop||null,t.target_price,t.agents_fired,t.layer,t.tier,t.signal_detail||null,"closed",t.pnl||0,t.pnl_pct||0,t.exit_reason,t.closes_at,t.opened_at,t.closed_at); } catch {}
       }
     }
     if (b.open_positions?.length) {
       const ins = db.prepare("INSERT OR IGNORE INTO paper_trades (id,market_id,market_question,category,market_type,side,entry_price,current_price,size,shares,stop_price,trailing_stop,target_price,high_water_mark,agents_fired,layer,tier,signal_detail,status,pnl,pnl_pct,closes_at,opened_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
       for (const p of b.open_positions) {
-        ins.run(p.id,p.market_id,p.market_question,p.category||"general",p.market_type||"other",p.side||"YES",p.entry_price,p.current_price||p.entry_price,p.size,p.shares,p.stop_price,p.trailing_stop||null,p.target_price,p.high_water_mark||p.entry_price,p.agents_fired,p.layer,p.tier,p.signal_detail||null,"open",0,0,p.closes_at,p.opened_at);
-        restored++;
+        try {
+          ins.run(p.id,p.market_id,p.market_question,p.category||"general",p.market_type||"other",p.side||"YES",p.entry_price,p.current_price||p.entry_price,p.size,p.shares,p.stop_price,p.trailing_stop||null,p.target_price,p.high_water_mark||p.entry_price,p.agents_fired,p.layer,p.tier,p.signal_detail||null,"open",0,0,p.closes_at,p.opened_at);
+          restored++;
+        } catch {}
       }
     }
     if (b.whales?.length) {
       const ins = db.prepare("INSERT OR IGNORE INTO whales (address,rank,win_rate,avg_profit,total_trades,recent_trades,profit_30d,tier,days_in_top50,confirmed,last_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
-      for (const w of b.whales) ins.run(w.address,w.rank,w.win_rate,w.avg_profit,w.total_trades,w.recent_trades,w.profit_30d,w.tier,w.days_in_top50,w.confirmed,w.last_seen);
+      for (const w of b.whales) { try { ins.run(w.address,w.rank,w.win_rate,w.avg_profit,w.total_trades,w.recent_trades,w.profit_30d,w.tier,w.days_in_top50,w.confirmed,w.last_seen); } catch {} }
     }
     if (b.cat_perf?.length) {
       const ins = db.prepare("INSERT OR IGNORE INTO category_performance (market_type,trades,wins,total_pnl) VALUES (?,?,?,?)");
-      for (const c of b.cat_perf) ins.run(c.market_type,c.trades,c.wins,c.total_pnl);
+      for (const c of b.cat_perf) { try { ins.run(c.market_type,c.trades,c.wins,c.total_pnl); } catch {} }
     }
     console.log(`Restored: ${restored} open, ${b.closed_trades?.length||0} closed, ${b.whales?.length||0} whales`);
-    return restored;
-  } catch(e) { console.error("Restore:",e.message); return 0; }
+  } catch(e) { console.error("Restore error:", e.message); }
+  return restored;
 }
 
-const restored = restoreFromBackup();
+let restored = 0; // set in launch after async restore
 
 // ── HELPERS ───────────────────────────────────────────────
 const POLY_HDR = {
@@ -1247,9 +1311,9 @@ ${viable.length} viable
 let scanning=false;
 setInterval(async()=>{if(scanning||getState("paused"))return;scanning=true;try{await runScan();}finally{scanning=false;}},480000);
 setInterval(async()=>{if(!getState("paused"))await monitorPositions();},90000); // 90s — catch scalp windows
-setInterval(saveFullBackup,600000);
+setInterval(()=>saveFullBackup().catch(e=>console.error("Backup:",e.message)),600000);
 // Dedupe news every hour — prevents accumulation of duplicates during runtime
-setInterval(()=>{try{db.exec("DELETE FROM news_items WHERE id NOT IN (SELECT MIN(id) FROM news_items GROUP BY source,headline)");}catch{}},3600000);
+setInterval(()=>{try{db.exec("DELETE FROM news_items WHERE id NOT IN (SELECT MIN(id) FROM news_items GROUP BY source,headline)");}catch{}},3600000); // hourly dedup
 cron.schedule("0 3 * * *",refreshWhales,{timezone:"UTC"});
 cron.schedule("0 6 * * *",async()=>{
   const open=getOpenTrades(); const perf=stmt.catPerf.all();
@@ -1260,8 +1324,10 @@ cron.schedule("0 6 * * *",async()=>{
 // ── LAUNCH ────────────────────────────────────────────────
 (async()=>{
   console.log("VeraPimpo v3.0 starting...");
+  // Restore from cloud backup first (async)
+  restored = await restoreFromBackup();
   if(bot){await bot.launch();console.log("Telegram bot active");}
-  if(restored>0) await tg(`<b>VeraPimpo v3 Restarted</b>\n${restored} open positions restored.\nClosed trades, whales, and P&L also restored.`);
+  if(restored>0) await tg(`<b>VeraPimpo v3 Restarted</b>\n${restored} open positions restored from cloud backup.\nClosed trades, whales, and P&L fully restored.`);
   const conf=stmt.whalesCount.get()?.c||0;
   await tg(`<b>VeraPimpo v3.0 Online</b>\n\nPaper: YES | Budget: $${G.BUDGET}\nEntry: 20-60% | Edge: 8%+ | Liq: $25k+ | 1-14 days\nBlocked: esports, entertainment\nWhales confirmed: ${conf}\n7 agents | 14+ guardrails | First scan in 60s`);
   setTimeout(async()=>{await refreshWhales();await runScan();},60000);
