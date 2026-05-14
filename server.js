@@ -397,7 +397,7 @@ async function safeFetch(url, hdrs={}, timeout=10000) {
   } catch{return null;} finally{clearTimeout(t);}
 }
 
-async function safeFetchText(url, timeout=8000) {
+async function safeFetchText(url, timeout=4000) {
   const c=new AbortController(); const t=setTimeout(()=>c.abort(),timeout);
   try{return await(await fetch(url,{signal:c.signal,headers:{"User-Agent":"Mozilla/5.0"}})).text();}
   catch{return "";} finally{clearTimeout(t);}
@@ -580,7 +580,7 @@ async function fetchSportsSignal(market) {
   const hoursLeft=endDate?(endDate-new Date())/3600000:999;
 
   const [gg,espn]=await Promise.all([
-    safeFetchText(`https://news.google.com/rss/search?q=${query}+sport&hl=en-US&gl=US&ceid=US:en`),
+    safeFetchText(`https://news.google.com/rss/search?q=${query}+sport&hl=en-US&gl=US&ceid=US:en`, 4000),
     safeFetchText("https://www.espn.com/espn/rss/news"),
   ]);
 
@@ -1083,6 +1083,15 @@ async function runScan() {
 }
 
 async function _runScanCore() {
+  // Hard timeout — if scan takes >5 minutes something is hung
+  const scanTimeout = setTimeout(async()=>{
+    console.error("Scan timeout after 5 minutes — something is hung");
+    try { await tg("<b>VeraPimpo</b> — Scan timed out (5 min). Auto-recovering."); } catch {}
+  }, 300000);
+  try { await __runScanBody(); } finally { clearTimeout(scanTimeout); }
+}
+
+async function __runScanBody() {
   const openBefore=getOpenTrades();
   if(openBefore.length>=G.MAX_POSITIONS){
     await monitorPositions();
@@ -1122,7 +1131,7 @@ async function _runScanCore() {
     const aScore=1-Math.abs((a._yesPrice||0.5)-0.35)*2;
     const bScore=1-Math.abs((b._yesPrice||0.5)-0.35)*2;
     return bScore-aScore;
-  }).slice(0,30); // check 30 best candidates
+  }).slice(0,15); // check 15 best candidates — keeps scan under 3 minutes
 
   console.log(`${viable.length} viable from ${raw.length} across 3 pages (${G.FLOOR*100}-${G.CEIL*100}% | ${G.MIN_DAYS}-${G.MAX_DAYS}d | $${(G.MIN_LIQ/1000).toFixed(0)}k+ liq)`);
 
@@ -1132,24 +1141,22 @@ async function _runScanCore() {
 
   let traded=0,scanned=0,blocked={};
 
-  // Pre-fetch ALL specialized signals once — populates news feed AND caches for trading loop
-  const specSigCache = new Map();
-  for(const market of viable){
-    try{
-      const sig = await fetchSpecializedSignal(market);
-      specSigCache.set(market._id, sig);
-    } catch{}
-    await delay(150);
-  }
+  // Pre-populate news in background — 10 markets, fire-and-forget
+  (async()=>{
+    for(const m of viable.slice(0,10)){
+      try{ await fetchSpecializedSignal(m); } catch{}
+      await delay(200);
+    }
+  })().catch(()=>{});
 
-  let openCount = getOpenTrades().length; // cached — refreshed after each trade
+  let openCount = getOpenTrades().length;
   for(const market of viable){
     if(openCount>=G.MAX_POSITIONS) break;
-    scanned++; // outside try — always counts
+    scanned++;
     try{
-      // Use cached signal — no double API call
-      const [wa] = await Promise.all([getWhaleActivity(market)]);
-      const specSig = specSigCache.get(market._id) || {signal:false,confidence:0,detail:"Cache miss"};
+      const wa      = await getWhaleActivity(market);
+      // Fetch on-demand — only for markets actually evaluated
+      const specSig = await fetchSpecializedSignal(market).catch(()=>({signal:false,confidence:0,detail:"Fetch error"}));
 
       const whaleRes   = agentWhaleCopy(wa, hasConfirmedWhales);
       const specRes    = agentSpecialized(specSig);
@@ -1208,7 +1215,7 @@ async function _runScanCore() {
     (blockSummary?`\nBlocked: ${blockSummary}`:"")
   );
   await monitorPositions();
-} // end _runScanCore
+} // end __runScanBody
 
 // ── REST API ──────────────────────────────────────────────
 const app=express();
