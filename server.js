@@ -509,7 +509,12 @@ async function fetchCryptoSignal(market) {
     }
   }
 
-  if(!thresholds.length) return {signal:true,confidence:0.6,detail:`${coinId} $${price.toLocaleString()} | 24h: ${change24.toFixed(1)}%`,price,change24};
+  // No threshold in question ("Bitcoin up or down") — use momentum only
+  if(!thresholds.length) {
+    const conf = Math.abs(change24)>2?0.55:0.4; // high momentum = more confidence
+    return {signal:true,confidence:conf,price,change24,
+      detail:`${coinId} $${price.toLocaleString()} | 24h: ${change24.toFixed(1)}% (no threshold)`};
+  }
 
   const target=thresholds[0];
   const distPct=((target-price)/price)*100;
@@ -1099,6 +1104,10 @@ async function __runScanBody() {
     return;
   }
   console.log("Scan v3",new Date().toISOString());
+  // Send progress update if scan takes too long (visible in Telegram)
+  const progressTimer = setTimeout(async()=>{
+    try{ await tg(`<b>VeraPimpo</b> — Scan in progress (60s+)...`); }catch{}
+  }, 60000);
   try { await Promise.all([refreshNewsCache(),scrapeTelegramChannels()]); } catch {}
 
   // Fetch 2 pages sequentially — avoids memory spikes on Railway free tier
@@ -1154,8 +1163,11 @@ async function __runScanBody() {
     if(openCount>=G.MAX_POSITIONS) break;
     scanned++;
     try{
-      const wa      = await getWhaleActivity(market);
-      // Fetch on-demand — only for markets actually evaluated
+        // Skip whale API calls when no confirmed whales — saves 2min/scan
+      const wa = hasConfirmedWhales
+        ? await getWhaleActivity(market)
+        : {whales:[],clustering:0,uniqueWhales:[]};
+      // Fetch specialized signal on-demand
       const specSig = await fetchSpecializedSignal(market).catch(()=>({signal:false,confidence:0,detail:"Fetch error"}));
 
       const whaleRes   = agentWhaleCopy(wa, hasConfirmedWhales);
@@ -1215,6 +1227,7 @@ async function __runScanBody() {
     (blockSummary?`\nBlocked: ${blockSummary}`:"")
   );
   await monitorPositions();
+  clearTimeout(progressTimer);
 } // end __runScanBody
 
 // ── REST API ──────────────────────────────────────────────
@@ -1274,7 +1287,14 @@ if(bot){
   bot.command("history",ctx=>{const rows=db.prepare("SELECT * FROM paper_trades WHERE status='closed' ORDER BY closed_at DESC LIMIT 15").all();if(!rows.length){ctx.reply("No closed trades.");return;}let msg=`<b>Last ${rows.length} Trades</b>\n\n`;for(const t of rows)msg+=`${t.pnl>=0?"🟢":"🔴"} [${t.market_type||"?"}] ${t.market_question?.slice(0,45)}\n${t.pnl>=0?"+":""}$${t.pnl?.toFixed(2)} [${t.exit_reason}]\n\n`;ctx.replyWithHTML(msg);});
   bot.command("whales",ctx=>{const conf=stmt.whalesCount.get()?.c||0;if(!conf){ctx.reply(`No confirmed whales yet (need 3 consecutive days in top 50).\nWhale agents are inactive until first confirmation.`);return;}const w=db.prepare("SELECT * FROM whales WHERE confirmed=1 ORDER BY rank LIMIT 10").all();let msg="<b>Confirmed Whales</b>\n\n";for(const r of w)msg+=`#${r.rank} ${r.address.slice(0,10)}... | T${r.tier} | ${(r.win_rate*100).toFixed(0)}% WR\n`;ctx.replyWithHTML(msg);});
   bot.command("whalesscan",async ctx=>{ctx.replyWithHTML("<i>Whale scan started...</i>");await refreshWhales();ctx.replyWithHTML(`Done. Confirmed: ${stmt.whalesCount.get()?.c||0}`);});
-  bot.command("scan",ctx=>{ctx.replyWithHTML("<i>Manual scan triggered...</i>");runScan();});
+  bot.command("scan",ctx=>{
+    if (scanning) {
+      ctx.replyWithHTML(`<i>Scan already running (${((Date.now()-scanStarted)/1000).toFixed(0)}s elapsed) — wait for it to complete</i>`);
+      return;
+    }
+    ctx.replyWithHTML("<i>Manual scan triggered...</i>");
+    safeScan();
+  });
   bot.command("sync",async ctx=>{
     const r=await restoreFromBackup();
     const open=getOpenTrades();
@@ -1353,8 +1373,22 @@ ${viable.length} viable
 }
 
 // ── SCHEDULES ─────────────────────────────────────────────
-let scanning=false;
-setInterval(async()=>{if(scanning||getState("paused"))return;scanning=true;try{await runScan();}finally{scanning=false;}},480000);
+let scanning = false;
+let scanStarted = 0;
+
+async function safeScan() {
+  if (scanning) { console.log("Scan blocked — already running"); return; }
+  if (getState("paused")) return;
+  scanning = true;
+  scanStarted = Date.now();
+  try   { await runScan(); }
+  finally {
+    scanning = false;
+    console.log(`Scan done in ${((Date.now()-scanStarted)/1000).toFixed(1)}s`);
+  }
+}
+
+setInterval(safeScan, 480000);
 setInterval(async()=>{if(!getState("paused"))await monitorPositions();},90000); // 90s — catch scalp windows
 setInterval(()=>saveFullBackup().catch(e=>console.error("Backup:",e.message)),600000);
 // Dedupe news every hour — prevents accumulation of duplicates during runtime
