@@ -1075,6 +1075,14 @@ async function refreshWhales() {
 // ── MAIN SCAN ─────────────────────────────────────────────
 async function runScan() {
   if(getState("paused")) return;
+  try { await _runScanCore(); }
+  catch(e) {
+    console.error("Scan crashed:", e.message, e.stack?.slice(0,300));
+    try { await tg(`<b>VeraPimpo Scan Error</b>\n${e.message}`); } catch {}
+  }
+}
+
+async function _runScanCore() {
   const openBefore=getOpenTrades();
   if(openBefore.length>=G.MAX_POSITIONS){
     await monitorPositions();
@@ -1082,21 +1090,23 @@ async function runScan() {
     return;
   }
   console.log("Scan v3",new Date().toISOString());
-  await Promise.all([refreshNewsCache(),scrapeTelegramChannels()]);
+  try { await Promise.all([refreshNewsCache(),scrapeTelegramChannels()]); } catch {}
 
-  // Fetch 3 pages of markets — top 100 are efficiently priced, opportunities are in 100-300
-  const [p1,p2,p3]=await Promise.all([
-    getMarkets(100,  0),
-    getMarkets(100,100),
-    getMarkets(100,200),
-  ]);
-  const seen=new Set();
-  const raw=[...p1,...p2,...p3].filter(m=>{
-    const k=m.id||m.conditionId||m.slug;
-    if(!k||seen.has(k)) return false;
-    seen.add(k); return true;
-  });
-  if(!raw.length){console.log("No markets from API");return;}
+  // Fetch 2 pages sequentially — avoids memory spikes on Railway free tier
+  // Page 1 = top markets (efficient pricing), Page 2 = mid-tier (better opportunity)
+  const seen = new Set();
+  const raw  = [];
+  for (const offset of [0, 100]) {
+    try {
+      const page = await getMarkets(100, offset);
+      for (const m of page) {
+        const k = m.id||m.conditionId||m.slug;
+        if (k && !seen.has(k)) { seen.add(k); raw.push(m); }
+      }
+      await delay(300); // brief pause between pages
+    } catch(e) { console.error(`Market fetch offset=${offset}:`, e.message); }
+  }
+  if (!raw.length) { console.log("No markets from API"); return; }
 
   const hasConfirmedWhales=stmt.whalesCount.get()?.c>0;
 
@@ -1198,7 +1208,7 @@ async function runScan() {
     (blockSummary?`\nBlocked: ${blockSummary}`:"")
   );
   await monitorPositions();
-}
+} // end _runScanCore
 
 // ── REST API ──────────────────────────────────────────────
 const app=express();
@@ -1258,7 +1268,11 @@ if(bot){
   bot.command("whales",ctx=>{const conf=stmt.whalesCount.get()?.c||0;if(!conf){ctx.reply(`No confirmed whales yet (need 3 consecutive days in top 50).\nWhale agents are inactive until first confirmation.`);return;}const w=db.prepare("SELECT * FROM whales WHERE confirmed=1 ORDER BY rank LIMIT 10").all();let msg="<b>Confirmed Whales</b>\n\n";for(const r of w)msg+=`#${r.rank} ${r.address.slice(0,10)}... | T${r.tier} | ${(r.win_rate*100).toFixed(0)}% WR\n`;ctx.replyWithHTML(msg);});
   bot.command("whalesscan",async ctx=>{ctx.replyWithHTML("<i>Whale scan started...</i>");await refreshWhales();ctx.replyWithHTML(`Done. Confirmed: ${stmt.whalesCount.get()?.c||0}`);});
   bot.command("scan",ctx=>{ctx.replyWithHTML("<i>Manual scan triggered...</i>");runScan();});
-  bot.command("sync",ctx=>{const r=restoreFromBackup(),open=getOpenTrades();ctx.replyWithHTML(`<b>Sync</b>\nRestored: ${r} | Open: ${open.length}/${G.MAX_POSITIONS} | $${getDeployed().toFixed(2)}`);});
+  bot.command("sync",async ctx=>{
+    const r=await restoreFromBackup();
+    const open=getOpenTrades();
+    ctx.replyWithHTML(`<b>Sync</b>\nRestored: ${r} | Open: ${open.length}/${G.MAX_POSITIONS} | $${getDeployed().toFixed(2)}`);
+  });
   bot.command("markets",ctx=>{const cached=stmt.cachedMkts.all();if(!cached.length){ctx.reply("No markets cached. /scan first.");return;}let msg="<b>Top Markets (v3 filtered)</b>\n\n";for(const m of cached.slice(0,8))msg+=`[${m.market_type?.toUpperCase()||"?"}] <b>${m.question?.slice(0,60)}</b>\nYES: ${((m.yes_price||0)*100).toFixed(1)}% | Score: ${m.score||0}\n\n`;ctx.replyWithHTML(msg);});
   bot.command("news",ctx=>{const rows=db.prepare("SELECT * FROM news_items ORDER BY fetched_at DESC LIMIT 10").all();if(!rows.length){ctx.reply("No news. /scan first.");return;}let msg="<b>News Feed</b>\n\n";for(const n of rows)msg+=`[${n.signal_quality?.toUpperCase()||"RSS"}] ${n.source}\n${n.headline?.slice(0,80)}\n\n`;ctx.replyWithHTML(msg);});
   bot.command("strategy",ctx=>{
@@ -1325,7 +1339,7 @@ ${viable.length} viable
   bot.command("resume",ctx=>{setState("paused",false);ctx.reply("Resumed.");});
   bot.command("status",ctx=>{
     const open=getOpenTrades(); const conf=stmt.whalesCount.get()?.c||0;
-    ctx.replyWithHTML(`<b>VeraPimpo v3 Status</b>\n\nMode: ${getState("paused")?"PAUSED":"ACTIVE"} | Paper: YES\nBudget: $${G.BUDGET} | Halt: $${G.LOSS_HALT}\nOpen: ${open.length}/${G.MAX_POSITIONS} | $${getDeployed().toFixed(2)}\nToday: ${getState("daily_trades")||0}/${G.MAX_DAILY}\nWhales confirmed: ${conf}\nEntry: ${G.FLOOR*100}-${G.CEIL*100}% | Edge: ${G.MIN_EDGE*100}%+ | Liq: $${G.MIN_LIQ/1000}k+\nWindow: ${G.MIN_DAYS}-${G.MAX_DAYS} days | Blocked: esports, entertainment`);
+    ctx.replyWithHTML(`<b>VeraPimpo v3 Status</b>\n\nMode: ${getState("paused")?"PAUSED":"ACTIVE"} | Paper: YES\nBudget: $${G.BUDGET} | Halt: $${G.LOSS_HALT}\nOpen: ${open.length}/${G.MAX_POSITIONS} | $${getDeployed().toFixed(2)}\nToday: ${getState("daily_trades")||0}/${G.MAX_DAILY}\nWhales confirmed: ${conf}\nEntry: ${G.FLOOR*100}-${G.CEIL*100}% | Edge: ${(G.MIN_EDGE*100).toFixed(0)}%+ | Liq: $${G.MIN_LIQ/1000}k+\nWindow: ${G.MIN_DAYS}-${G.MAX_DAYS} days | Blocked: esports, entertainment`);
   });
   bot.command("live",ctx=>ctx.replyWithHTML(`<b>Going Live</b>\n\n1. Create Polygon wallet\n2. Fund USDC via Rain exchange\n3. Add WALLET_PRIVATE_KEY to Railway\n4. Set PAPER=false in server.js\n5. Redeploy`));
   bot.help(ctx=>ctx.replyWithHTML(`/portfolio /scan /sync /positions /history /whales /whalesscan /markets /news /strategy /pause /resume /status /live`));
