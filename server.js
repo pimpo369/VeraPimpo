@@ -431,8 +431,9 @@ function resetDailyCounters() {
 
 function normalizeMarket(m) {
   const mtype = classifyMarket(m.question);
+  const _id   = String(m.id||m.conditionId||m.slug||Math.random()); // stable cache/lookup key
   return {
-    ...m,
+    ...m, _id,
     _yesPrice : extractPrice(m),
     _liq      : parseFloat(m.liquidity||m.liquidityNum||0),
     _endDate  : m.endDate||m.end_date_iso||m.endDateIso||null,
@@ -1083,7 +1084,18 @@ async function runScan() {
   console.log("Scan v3",new Date().toISOString());
   await Promise.all([refreshNewsCache(),scrapeTelegramChannels()]);
 
-  const raw=await getMarkets(100,0);
+  // Fetch 3 pages of markets — top 100 are efficiently priced, opportunities are in 100-300
+  const [p1,p2,p3]=await Promise.all([
+    getMarkets(100,  0),
+    getMarkets(100,100),
+    getMarkets(100,200),
+  ]);
+  const seen=new Set();
+  const raw=[...p1,...p2,...p3].filter(m=>{
+    const k=m.id||m.conditionId||m.slug;
+    if(!k||seen.has(k)) return false;
+    seen.add(k); return true;
+  });
   if(!raw.length){console.log("No markets from API");return;}
 
   const hasConfirmedWhales=stmt.whalesCount.get()?.c>0;
@@ -1092,12 +1104,17 @@ async function runScan() {
     if(BLOCKED_TYPES.has(m._type)) return false;
     if(m._yesPrice<=G.FLOOR||m._yesPrice>=G.CEIL) return false;
     if(m._liq<G.MIN_LIQ) return false;
-    if(!m._endDate) return true;
+    if(!m._endDate) return false; // skip markets with no resolution date — waste of scan time
     const days=(new Date(m._endDate)-new Date())/86400000;
     return days>=G.MIN_DAYS&&days<=G.MAX_DAYS;
-  }).slice(0,20);
+  }).sort((a,b)=>{
+    // Prioritise mid-range prices (30-50%) — more mispricing opportunity
+    const aScore=1-Math.abs((a._yesPrice||0.5)-0.35)*2;
+    const bScore=1-Math.abs((b._yesPrice||0.5)-0.35)*2;
+    return bScore-aScore;
+  }).slice(0,30); // check 30 best candidates
 
-  console.log(`${viable.length} viable from ${raw.length} (${G.FLOOR*100}-${G.CEIL*100}% | ${G.MIN_DAYS}-${G.MAX_DAYS}d | $${(G.MIN_LIQ/1000).toFixed(0)}k+ liq | blocked: esports/entertainment)`);
+  console.log(`${viable.length} viable from ${raw.length} across 3 pages (${G.FLOOR*100}-${G.CEIL*100}% | ${G.MIN_DAYS}-${G.MAX_DAYS}d | $${(G.MIN_LIQ/1000).toFixed(0)}k+ liq)`);
 
   for(const m of viable){
     try{stmt.upsertMkt.run(m.id||m.conditionId,m.question,m.category||"general",m._type,m._yesPrice,1-m._yesPrice,parseFloat(m.volume||0),m._endDate||null,Math.round(Math.abs(m._yesPrice-0.5)*200+Math.min(m._liq/100000,0.3)*30),`type:${m._type}`);}catch{}
@@ -1110,18 +1127,19 @@ async function runScan() {
   for(const market of viable){
     try{
       const sig = await fetchSpecializedSignal(market);
-      specSigCache.set(market.id, sig);
+      specSigCache.set(market._id, sig);
     } catch{}
     await delay(150);
   }
 
+  let openCount = getOpenTrades().length; // cached — refreshed after each trade
   for(const market of viable){
-    if(getOpenTrades().length>=G.MAX_POSITIONS) break;
+    if(openCount>=G.MAX_POSITIONS) break;
+    scanned++; // outside try — always counts
     try{
-      scanned++;
       // Use cached signal — no double API call
       const [wa] = await Promise.all([getWhaleActivity(market)]);
-      const specSig = specSigCache.get(market.id) || {signal:false,confidence:0,detail:"No signal"};
+      const specSig = specSigCache.get(market._id) || {signal:false,confidence:0,detail:"Cache miss"};
 
       const whaleRes   = agentWhaleCopy(wa, hasConfirmedWhales);
       const specRes    = agentSpecialized(specSig);
@@ -1129,7 +1147,7 @@ async function runScan() {
       const techRes    = agentTechnical(market);
       const mathRes    = agentResolutionMath(market);
       // Agent 7: Telegram Signal — based on TG channel messages matching this market
-      const tgBoost=getTelegramBoost(market.id,market.question);
+      const tgBoost=getTelegramBoost(market._id||market.id,market.question);
       const tgConf=Math.max(tgBoost.whale,tgBoost.news);
       const sentRes = {vote:tgConf>0.3||specSig.confidence>0.45, confidence:Math.max(tgConf,specSig.confidence*0.6)||0.3, detail:`TG boost: ${(tgConf*100).toFixed(0)}% | Spec: ${(specSig.confidence*100).toFixed(0)}%`};
       const stealthRes = agentStealth(wa, specRes.vote, newsRes.vote, hasConfirmedWhales);
@@ -1155,11 +1173,12 @@ async function runScan() {
       console.log(`[SCAN] ${market._type} ${(_price*100).toFixed(1)}% ${_days.toFixed(1)}d $${_liq.toLocaleString()} → ${consensus.action}[${_votes.length}/${_active.length}] votes:${_votes.join(",")||"NONE"} spec:${(specSig.confidence*100).toFixed(0)}%`);
 
       if(consensus.action==="ENTER"){
-        stmt.updateNewsStatus.run(market.id);
+        stmt.updateNewsStatus.run(market._id||market.id||"");
         const guard=checkGuardrails(market,consensus,specSig);
         if(guard.ok){
           await executePaperTrade(market,consensus,allAgents,guard,specSig);
           traded++;
+          openCount++; // update cached count so next iteration sees correct value
         }else{
           const r=guard.reason;
           blocked[r]=(blocked[r]||0)+1;
@@ -1171,8 +1190,13 @@ async function runScan() {
   }
 
   const finalOpen=getOpenTrades();
-  const blockSummary=Object.entries(blocked).map(([k,v])=>`${k}:${v}`).join(", ");
-  await tg(`<b>VeraPimpo Scan v3</b>\n${traded} traded | ${scanned} scanned | ${viable.length} viable\nPositions: ${finalOpen.length}/${G.MAX_POSITIONS} | $${getDeployed().toFixed(2)}/$${G.BUDGET}\n${blockSummary?`Blocked: ${blockSummary}`:""}`);
+  const blockSummary=Object.entries(blocked).map(([k,v])=>`${k}:${v}`).join(" | ");
+  await tg(
+    `<b>VeraPimpo Scan v3</b>\n` +
+    `${traded} traded | ${scanned} evaluated | ${viable.length} viable from ${raw.length}\n` +
+    `Positions: ${finalOpen.length}/${G.MAX_POSITIONS} | $${getDeployed().toFixed(2)}/$${G.BUDGET}` +
+    (blockSummary?`\nBlocked: ${blockSummary}`:"")
+  );
   await monitorPositions();
 }
 
