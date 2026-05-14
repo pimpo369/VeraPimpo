@@ -77,6 +77,14 @@ const G = {
 
 // ── MARKET TYPES ──────────────────────────────────────────
 const BLOCKED_TYPES = new Set(["esports","entertainment"]);
+// Block patterns in market questions that indicate low-edge binary markets
+function isBlockedPattern(question) {
+  const q = (question||"").toLowerCase();
+  // Daily up/down direction markets — no price signal available
+  if (/up or down on (may|june|july|aug|sep|oct|nov|dec|jan|feb|mar|apr)/.test(q)) return "daily-direction";
+  // Same-day markets (already resolved or near blackout)
+  return null;
+}
 
 function classifyMarket(question) {
   const q = (question || "").toLowerCase();
@@ -844,6 +852,8 @@ function checkGuardrails(market, consensus, specializedResult) {
   if(isInCooldown(market.id||market.conditionId)) return {ok:false,reason:"Re-entry cooldown active"};
   if((getState("daily_trades")||0)>=G.MAX_DAILY)  return {ok:false,reason:"Daily limit"};
   if(BLOCKED_TYPES.has(mtype))                    return {ok:false,reason:`${mtype} blocked — no signal advantage`};
+  const blockedPat = isBlockedPattern(market.question);
+  if(blockedPat)                                  return {ok:false,reason:`Pattern blocked: ${blockedPat}`};
   if(price>=G.CEIL||price<=G.FLOOR)               return {ok:false,reason:`Price ${(price*100).toFixed(0)}% outside ${(G.FLOOR*100).toFixed(0)}-${(G.CEIL*100).toFixed(0)}% range`};
   if(liq<G.MIN_LIQ)                               return {ok:false,reason:`Liquidity $${liq.toLocaleString()} < $${G.MIN_LIQ.toLocaleString()}`};
   if(hoursLeft<G.BLACKOUT_HRS)                    return {ok:false,reason:"Blackout window"};
@@ -858,6 +868,11 @@ function checkGuardrails(market, consensus, specializedResult) {
   // Edge check
   const edge=Math.abs(price-0.5)*2;
   if(edge<G.MIN_EDGE)                             return {ok:false,reason:`Edge ${(edge*100).toFixed(1)}% < ${G.MIN_EDGE*100}% minimum`};
+
+  // Block entry if price is too high for the time remaining — no room to profit
+  const hoursLeftG = market._endDate?(new Date(market._endDate)-new Date())/3600000:999;
+  const maxEntry   = hoursLeftG<24?0.52:hoursLeftG<72?0.58:G.CEIL;
+  if(price>maxEntry)                              return {ok:false,reason:`Price ${(price*100).toFixed(0)}% too high for ${hoursLeftG.toFixed(0)}h left (max ${(maxEntry*100).toFixed(0)}%)`};
 
   // Kelly-based sizing
   const conf=specializedResult?.confidence||0.5;
@@ -908,11 +923,14 @@ async function executePaperTrade(market, consensus, agents, guard, specializedRe
   // For medium (1-7 days): moderate target
   // For long (>7 days): conservative — markets are slow to reprice
   let targetMult, targetCap;
-  if(hoursLeft<24)       { targetMult=0.40; targetCap=0.62; }
-  else if(hoursLeft<72)  { targetMult=0.50; targetCap=0.72; }
-  else if(hoursLeft<168) { targetMult=0.60; targetCap=0.80; }
-  else                   { targetMult=0.55; targetCap=0.75; } // long duration — be conservative
-  const target=+(Math.min(targetCap, price+(1-price)*targetMult)).toFixed(4);
+  if(hoursLeft<24)       { targetMult=0.40; targetCap=0.80; }
+  else if(hoursLeft<72)  { targetMult=0.50; targetCap=0.80; }
+  else if(hoursLeft<168) { targetMult=0.60; targetCap=0.85; }
+  else                   { targetMult=0.55; targetCap=0.80; }
+  const rawTarget = price + (1-price)*targetMult;
+  // Target MUST be at least 8% above entry — prevents instant exits
+  const minTarget = Math.min(0.92, price * 1.08);
+  const target = +(Math.max(minTarget, Math.min(targetCap, rawTarget))).toFixed(4);
   const fired=agents.filter(a=>a.vote&&!a.inactive).map(a=>a.name).join(",");
   const mtype=market._type||classifyMarket(market.question);
   const sigDetail=specializedResult?.detail||"";
@@ -1130,6 +1148,7 @@ async function __runScanBody() {
 
   const viable=raw.map(normalizeMarket).filter(m=>{
     if(BLOCKED_TYPES.has(m._type)) return false;
+    if(isBlockedPattern(m.question)) return false; // block daily-direction markets
     if(m._yesPrice<=G.FLOOR||m._yesPrice>=G.CEIL) return false;
     if(m._liq<G.MIN_LIQ) return false;
     if(!m._endDate) return false; // skip markets with no resolution date — waste of scan time
