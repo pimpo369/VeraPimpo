@@ -48,26 +48,31 @@ const cfg = {
 
 // ── GUARDRAILS v3 — tighter, smarter ─────────────────────
 const G = {
-  BUDGET        : 500,
-  MAX_POS       : 50,
-  MAX_POSITIONS : 8,
-  LOSS_HALT     : 150,
-  BLACKOUT_HRS  : 2,
-  CEIL          : 0.65,  // raised slightly — 65% ceiling
-  FLOOR         : 0.18,  // lowered slightly — 18% floor
-  MIN_LIQ       : 15000, // $15k — less restrictive
-  MAX_MKT_SHARE : 0.03,
-  MIN_EDGE      : 0.07,  // 7% minimum edge
-  MAX_DAILY     : 10,
-  MAX_CAT_DEP   : 0.30,
-  EXIT_TARGET   : 0.85,
-  VOL_SPIKE     : 3.0,
-  STOP_PCT      : 0.15,
-  TRAIL_PCT     : 0.10,
-  MIN_DAYS      : 0.08,  // 2 hours minimum — blackout handles the real floor
-  MAX_DAYS      : 21,    // 21 days — wider window
-  KELLY_FRAC    : 0.25,
-  MAX_CORR_CAT  : 2,
+  BUDGET           : 500,
+  MAX_POS          : 50,
+  MAX_POSITIONS    : 8,
+  LOSS_HALT        : 150,
+  BLACKOUT_HRS     : 2,
+  CEIL             : 0.65,
+  FLOOR            : 0.18,
+  MIN_LIQ          : 15000,
+  MAX_MKT_SHARE    : 0.03,
+  MIN_EDGE         : 0.07,
+  MAX_DAILY        : 20,   // raised — scalping needs more daily trades
+  MAX_CAT_DEP      : 0.30,
+  EXIT_TARGET      : 0.85,
+  VOL_SPIKE        : 3.0,
+  STOP_PCT         : 0.15,
+  TRAIL_PCT        : 0.10,
+  MIN_DAYS         : 0.08,
+  MAX_DAYS         : 21,
+  KELLY_FRAC       : 0.25,
+  MAX_CORR_CAT     : 2,
+  // ── SCALP MODE ─────────────────────────────────────
+  SCALP_MIN        : 2.00, // exit immediately at $2 profit
+  SCALP_MAX        : 5.00, // always exit at $5 profit
+  MIN_POSITION     : 20,   // minimum $20 so $2-5 is meaningful
+  REENTRY_COOLDOWN : 30,   // minutes before same market can re-enter after quick exit
 };
 
 // ── MARKET TYPES ──────────────────────────────────────────
@@ -198,6 +203,17 @@ try {
     CREATE INDEX IF NOT EXISTS idx_markets_scanned ON markets(last_scanned);
   `);
 } catch {}
+
+// Re-entry cooldown tracking (in-memory — resets on redeploy, that's fine)
+const reEntryCooldowns = new Map(); // marketId → timestamp when cooldown expires
+
+function isInCooldown(marketId) {
+  const exp = reEntryCooldowns.get(marketId);
+  return exp && Date.now() < exp;
+}
+function setCooldown(marketId) {
+  reEntryCooldowns.set(marketId, Date.now() + G.REENTRY_COOLDOWN * 60000);
+}
 
 // Add new columns to existing tables if upgrading from v2
 try { db.exec("ALTER TABLE paper_trades ADD COLUMN market_type TEXT DEFAULT 'other'"); } catch {}
@@ -755,6 +771,7 @@ function checkGuardrails(market, consensus, specializedResult) {
   if((getState("total_loss")||0)>=G.LOSS_HALT)    return {ok:false,reason:"Loss halt"};
   if(open.length>=G.MAX_POSITIONS)                return {ok:false,reason:"Max positions"};
   if(open.find(t=>t.market_id===market.id))       return {ok:false,reason:"Already open"};
+  if(isInCooldown(market.id||market.conditionId)) return {ok:false,reason:"Re-entry cooldown active"};
   if((getState("daily_trades")||0)>=G.MAX_DAILY)  return {ok:false,reason:"Daily limit"};
   if(BLOCKED_TYPES.has(mtype))                    return {ok:false,reason:`${mtype} blocked — no signal advantage`};
   if(price>=G.CEIL||price<=G.FLOOR)               return {ok:false,reason:`Price ${(price*100).toFixed(0)}% outside ${(G.FLOOR*100).toFixed(0)}-${(G.CEIL*100).toFixed(0)}% range`};
@@ -774,8 +791,9 @@ function checkGuardrails(market, consensus, specializedResult) {
 
   // Kelly-based sizing
   const conf=specializedResult?.confidence||0.5;
-  const size=Math.min(G.MAX_POS,Math.max(5,kellySize(edge,conf,G.BUDGET-deployed)));
-  if(size<5)                                       return {ok:false,reason:"Budget low"};
+  const rawSize=Math.min(G.MAX_POS,Math.max(G.MIN_POSITION,kellySize(edge,conf,G.BUDGET-deployed)));
+  const size=rawSize;
+  if(size<G.MIN_POSITION&&(G.BUDGET-deployed)<G.MIN_POSITION) return {ok:false,reason:"Budget low"};
   if(size/liq>G.MAX_MKT_SHARE)                    return {ok:false,reason:"Market share too large"};
 
   return {ok:true,size:+size.toFixed(2),edge:+edge.toFixed(3)};
@@ -867,7 +885,10 @@ async function monitorPositions() {
       stmt.updatePosition.run(price, newTrailing, hwm, trade.id);
 
       let exitReason=null;
-      if(price>=trade.target_price)                           exitReason="TARGET_HIT";
+      // ── SCALP EXIT — priority: lock in $2-5 profit fast ──
+      if(pnl>=G.SCALP_MAX)                                   exitReason="SCALP_PROFIT_MAX";
+      else if(pnl>=G.SCALP_MIN&&price>trade.entry_price*1.06) exitReason="SCALP_PROFIT_MIN";
+      else if(price>=trade.target_price)                      exitReason="TARGET_HIT";
       else if(price<=newTrailing)                             exitReason=newTrailing>trade.stop_price?"TRAILING_STOP":"STOP_HIT";
       else if(hoursLeft>0&&hoursLeft<=G.BLACKOUT_HRS)        exitReason="RESOLUTION_BLACKOUT";
       else if(baseVol>1000&&vol24>baseVol*G.VOL_SPIKE)       exitReason="VOLUME_SPIKE";
@@ -877,10 +898,14 @@ async function monitorPositions() {
         const totalPnl=(getState("total_pnl")||0)+pnl;
         setState("total_pnl",+totalPnl.toFixed(4));
         if(pnl<0) setState("total_loss",(getState("total_loss")||0)+Math.abs(pnl));
-        // Update category performance
         const mtype=trade.market_type||"other";
         const isWin=pnl>0?1:0;
         stmt.upsertCatPerf.run(mtype,isWin,pnl,isWin,pnl);
+        // Scalp exits: set re-entry cooldown so same market can be re-entered after 30min
+        if(exitReason==="SCALP_PROFIT_MAX"||exitReason==="SCALP_PROFIT_MIN") {
+          setCooldown(trade.market_id||trade.id);
+          console.log(`Scalp exit ${exitReason}: $${pnl.toFixed(2)} profit — cooldown 30min`);
+        }
         saveFullBackup();
         const msg=`<b>VERAPIMPO EXIT</b> [PAPER]\n\n<b>${trade.market_question?.slice(0,80)}</b>\n\n${(trade.entry_price*100).toFixed(1)}% → ${(price*100).toFixed(1)}%\nP&L: <b>${pnl>=0?"+":""}$${pnl.toFixed(2)} (${pnl_pct>=0?"+":""}${pnl_pct.toFixed(1)}%)</b>\nReason: ${exitReason} | Total: $${totalPnl.toFixed(2)}`;
         await tg(msg); logAlert("TRADE_CLOSED",msg,trade.market_id);
@@ -1221,7 +1246,7 @@ ${viable.length} viable
 // ── SCHEDULES ─────────────────────────────────────────────
 let scanning=false;
 setInterval(async()=>{if(scanning||getState("paused"))return;scanning=true;try{await runScan();}finally{scanning=false;}},480000);
-setInterval(async()=>{if(!getState("paused"))await monitorPositions();},180000);
+setInterval(async()=>{if(!getState("paused"))await monitorPositions();},90000); // 90s — catch scalp windows
 setInterval(saveFullBackup,600000);
 // Dedupe news every hour — prevents accumulation of duplicates during runtime
 setInterval(()=>{try{db.exec("DELETE FROM news_items WHERE id NOT IN (SELECT MIN(id) FROM news_items GROUP BY source,headline)");}catch{}},3600000);
